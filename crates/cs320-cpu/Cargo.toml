@@ -1,0 +1,11 @@
+[package]
+name = "cs320-cpu"
+description = "Armv8.1-M Mainline (Cortex-M85) instruction-set simulator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cs320-core.workspace = true
+log.workspace = true

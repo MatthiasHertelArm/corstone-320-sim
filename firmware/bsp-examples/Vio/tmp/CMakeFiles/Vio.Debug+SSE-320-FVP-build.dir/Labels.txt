@@ -1,0 +1,11 @@
+# Target labels
+ Vio.Debug+SSE-320-FVP
+# Source files and their labels
+/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Vio/tmp/CMakeFiles/Vio.Debug+SSE-320-FVP-build
+/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Vio/tmp/CMakeFiles/Vio.Debug+SSE-320-FVP-build.rule
+/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Vio/tmp/Vio.Debug+SSE-320-FVP/src/Vio.Debug+SSE-320-FVP-stamp/Vio.Debug+SSE-320-FVP-build.rule
+/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Vio/tmp/Vio.Debug+SSE-320-FVP/src/Vio.Debug+SSE-320-FVP-stamp/Vio.Debug+SSE-320-FVP-configure.rule
+/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Vio/tmp/Vio.Debug+SSE-320-FVP/src/Vio.Debug+SSE-320-FVP-stamp/Vio.Debug+SSE-320-FVP-patch.rule
+/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Vio/tmp/Vio.Debug+SSE-320-FVP/src/Vio.Debug+SSE-320-FVP-stamp/Vio.Debug+SSE-320-FVP-update.rule
+/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Vio/tmp/Vio.Debug+SSE-320-FVP/src/Vio.Debug+SSE-320-FVP-stamp/Vio.Debug+SSE-320-FVP-download.rule
+/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Vio/tmp/Vio.Debug+SSE-320-FVP/src/Vio.Debug+SSE-320-FVP-stamp/Vio.Debug+SSE-320-FVP-mkdir.rule

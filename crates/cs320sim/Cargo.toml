@@ -1,0 +1,29 @@
+[package]
+name = "cs320sim"
+description = "Corstone-320 simulator with a GDB server for the Arm CMSIS Debugger, a display, a camera and a microphone"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "cs320sim"
+path = "src/main.rs"
+
+[dependencies]
+cs320-core.workspace = true
+cs320-cpu.workspace = true
+cs320-soc.workspace = true
+cs320-board.workspace = true
+cs320-loader.workspace = true
+cs320-gdb.workspace = true
+cs320-gui = { workspace = true, optional = true, default-features = false }
+log.workspace = true
+env_logger = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_yaml_ng = "0.10"
+
+[features]
+default = ["gui", "audio"]
+gui = ["dep:cs320-gui"]
+audio = ["gui", "cs320-gui/audio"]

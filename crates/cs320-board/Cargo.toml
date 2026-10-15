@@ -1,0 +1,17 @@
+[package]
+name = "cs320-board"
+description = "Board model of the Corstone-320 simulator: frame and sample sources, the Machine and the simulation thread"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cs320-core.workspace = true
+cs320-cpu.workspace = true
+cs320-soc.workspace = true
+cs320-loader.workspace = true
+log.workspace = true
+crossbeam-channel.workspace = true
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp"] }
+hound = "3"

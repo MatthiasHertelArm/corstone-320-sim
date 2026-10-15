@@ -1,0 +1,21 @@
+# ninja log v7
+0	58	1792081873119755510	CMakeFiles/Group_Main.dir/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Blinky/Blinky/main.c.obj	275460282d019352
+1	79	1792081873120011007	CMakeFiles/Group_Main.dir/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Blinky/Blinky/Blinky.c.obj	7cd2e66be5681eb8
+1	97	1792081873120430294	CMakeFiles/ARM_CMSIS-Compiler_CORE_1_2_1.dir/Users/mather01/.cache/arm/packs/ARM/CMSIS-Compiler/2.3.0/source/core/gcc/retarget_syscalls.c.obj	9b33bae5a81bcfa0
+1	113	1792081873120162214	CMakeFiles/Group_API.dir/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Blinky/Blinky/API/Source/led_port.c.obj	539bdfe68d4586
+2	129	1792081873121764031	CMakeFiles/ARM_Device_Startup_C_Startup_2_0_0.dir/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Blinky/Blinky/RTE/Device/SSE-320-FVP/system_SSE320.c.obj	4c37362c966f786f
+2	140	1792081873121497950	CMakeFiles/ARM_Device_Native_Driver_UART_1_1_0.dir/Users/mather01/.cache/arm/packs/ARM/SSE_320_BSP/1.1.0/Device/Source/uart_cmsdk_drv.c.obj	669d265b59312286
+2	156	1792081873121359868	CMakeFiles/ARM_Device_Native_Driver_Timeout_1_0_1.dir/Users/mather01/.cache/arm/packs/ARM/SSE_320_BSP/1.1.0/Device/Source/systimer_armv8-m_timeout.c.obj	c7b8776763c504f9
+2	167	1792081873121069288	CMakeFiles/ARM_Device_Native_Driver_SysCounter_1_0_1.dir/Users/mather01/.cache/arm/packs/ARM/SSE_320_BSP/1.1.0/Device/Source/syscounter_armv8-m_read_drv.c.obj	c04f6d538d66664e
+2	180	1792081873121883071	CMakeFiles/ARM_Device_USART_Retarget_1_0_0.dir/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Blinky/Blinky/RTE/Device/SSE-320-FVP/retarget.c.obj	469ecedcfac36633
+1	190	1792081873120569293	CMakeFiles/ARM_Device_Definition_2_0_0.dir/Users/mather01/.cache/arm/packs/ARM/SSE_320_BSP/1.1.0/Board/Device_Definition/device_definition.c.obj	674c41bf609d9fe5
+2	202	1792081873121634282	CMakeFiles/ARM_Device_Startup_C_Startup_2_0_0.dir/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Blinky/Blinky/RTE/Device/SSE-320-FVP/startup_SSE320.c.obj	4e9d1e93b5ed27c4
+1	203	1792081873120757041	CMakeFiles/ARM_Device_Native_Driver_IO_1_0_1.dir/Users/mather01/.cache/arm/packs/ARM/SSE_320_BSP/1.1.0/Device/Source/arm_mps3_io_drv.c.obj	bbf62c6d9f9b7c10
+1	214	1792081873120915873	CMakeFiles/ARM_Device_Native_Driver_SysCounter_1_0_1.dir/Users/mather01/.cache/arm/packs/ARM/SSE_320_BSP/1.1.0/Device/Source/syscounter_armv8-m_cntrl_drv.c.obj	e10e882bab8e8afc
+2	223	1792081873121220536	CMakeFiles/ARM_Device_Native_Driver_SysTimer_1_0_0.dir/Users/mather01/.cache/arm/packs/ARM/SSE_320_BSP/1.1.0/Device/Source/systimer_armv8-m_drv.c.obj	6a5183470b0da5e4
+1	232	1792081873120299504	CMakeFiles/ARM_CMSIS_Driver_USART_1_1_0.dir/Users/mather01/.cache/arm/packs/ARM/SSE_320_BSP/1.1.0/CMSIS_Driver/Driver_USART.c.obj	6b4d31c9bbcb2af5
+232	286	1792081873403851147	/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Blinky/build/SSE-320-FVP/GCC/Debug/Blinky/outdir/Blinky.elf	5033be72576f8e2
+232	286	1792081873403851147	gcc_linker_script.ld	5033be72576f8e2
+232	286	1792081873403851147	/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Blinky/tmp/1/gcc_linker_script.ld	5033be72576f8e2
+1	14	1792081873440573000	/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Blinky/build/SSE-320-FVP/GCC/Debug/Blinky/outdir/compile_commands.json	9d2c1ece546941e8
+1	22	1792081873448244034	/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Blinky/build/SSE-320-FVP/GCC/Debug/Blinky/outdir/compile_macros_c.h	707dc68cc439f73b

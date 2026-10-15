@@ -1,0 +1,23 @@
+[package]
+name = "cs320-gui"
+description = "Window of the Corstone-320 simulator: display, camera, microphone, board I/O, UART terminals"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cs320-core.workspace = true
+cs320-board.workspace = true
+cs320-soc.workspace = true
+cs320-loader.workspace = true
+log.workspace = true
+crossbeam-channel.workspace = true
+eframe = "0.36"
+egui = "0.36"
+cpal = { version = "0.18", optional = true }
+png = "0.18"
+
+[features]
+default = ["audio"]
+audio = ["dep:cpal"]

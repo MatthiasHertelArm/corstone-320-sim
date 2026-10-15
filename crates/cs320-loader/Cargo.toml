@@ -1,0 +1,13 @@
+[package]
+name = "cs320-loader"
+description = "ELF, Intel HEX and cbuild-run loading for the Corstone-320 simulator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+object = { version = "0.37", default-features = false, features = ["read_core", "elf", "std"] }
+ihex = "3"
+serde = { version = "1", features = ["derive"] }
+serde_yaml_ng = "0.10"

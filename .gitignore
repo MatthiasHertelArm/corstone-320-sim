@@ -1,0 +1,5 @@
+/target
+/out
+.DS_Store
+/firmware/*/out
+/fixtures/fvp/*.log

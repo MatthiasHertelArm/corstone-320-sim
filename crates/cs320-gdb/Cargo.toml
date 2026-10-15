@@ -1,0 +1,18 @@
+[package]
+name = "cs320-gdb"
+description = "GDB remote serial protocol server of the Corstone-320 simulator (CMSIS Debugger compatible)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cs320-core.workspace = true
+cs320-cpu.workspace = true
+cs320-board.workspace = true
+cs320-soc.workspace = true
+crossbeam-channel.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+cs320-loader.workspace = true

@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/cs320-core",
+    "crates/cs320-cpu",
+    "crates/cs320-soc",
+    "crates/cs320-loader",
+    "crates/cs320-board",
+    "crates/cs320-gdb",
+    "crates/cs320-gui",
+    "crates/cs320sim",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.95"
+repository = "https://github.com/MatthiasHertelArm/corstone-320-sim"
+
+[workspace.dependencies]
+cs320-core = { path = "crates/cs320-core" }
+cs320-cpu = { path = "crates/cs320-cpu" }
+cs320-soc = { path = "crates/cs320-soc" }
+cs320-board = { path = "crates/cs320-board" }
+cs320-loader = { path = "crates/cs320-loader" }
+cs320-gdb = { path = "crates/cs320-gdb" }
+cs320-gui = { path = "crates/cs320-gui", default-features = false }
+crossbeam-channel = "0.5"
+log = "0.4"
+
+[profile.release]
+debug = 1
+lto = "thin"
+codegen-units = 1
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2

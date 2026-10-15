@@ -1,0 +1,9 @@
+[package]
+name = "cs320-core"
+description = "Simulation time base and event scheduler of the Corstone-320 simulator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]

@@ -1,0 +1,37 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Blinky/tmp/CMakeFiles/Blinky.Debug+SSE-320-FVP-build"
+		},
+		{
+			"file" : "/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Blinky/tmp/CMakeFiles/Blinky.Debug+SSE-320-FVP-build.rule"
+		},
+		{
+			"file" : "/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Blinky/tmp/Blinky.Debug+SSE-320-FVP/src/Blinky.Debug+SSE-320-FVP-stamp/Blinky.Debug+SSE-320-FVP-build.rule"
+		},
+		{
+			"file" : "/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Blinky/tmp/Blinky.Debug+SSE-320-FVP/src/Blinky.Debug+SSE-320-FVP-stamp/Blinky.Debug+SSE-320-FVP-configure.rule"
+		},
+		{
+			"file" : "/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Blinky/tmp/Blinky.Debug+SSE-320-FVP/src/Blinky.Debug+SSE-320-FVP-stamp/Blinky.Debug+SSE-320-FVP-patch.rule"
+		},
+		{
+			"file" : "/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Blinky/tmp/Blinky.Debug+SSE-320-FVP/src/Blinky.Debug+SSE-320-FVP-stamp/Blinky.Debug+SSE-320-FVP-update.rule"
+		},
+		{
+			"file" : "/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Blinky/tmp/Blinky.Debug+SSE-320-FVP/src/Blinky.Debug+SSE-320-FVP-stamp/Blinky.Debug+SSE-320-FVP-download.rule"
+		},
+		{
+			"file" : "/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Blinky/tmp/Blinky.Debug+SSE-320-FVP/src/Blinky.Debug+SSE-320-FVP-stamp/Blinky.Debug+SSE-320-FVP-mkdir.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"Blinky.Debug+SSE-320-FVP"
+		],
+		"name" : "Blinky.Debug+SSE-320-FVP-build"
+	}
+}

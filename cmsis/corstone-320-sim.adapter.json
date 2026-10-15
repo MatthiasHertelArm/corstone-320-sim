@@ -1,0 +1,189 @@
+{
+    "data": {
+        "cwd": "${workspaceFolder}/<%= solution_folder %>",
+        "shell": {
+            "win32": {
+                "executable": "cmd.exe",
+                "args": [
+                    "/d",
+                    "/c"
+                ]
+            },
+            "linux": {
+                "executable": "/bin/bash",
+                "args": [
+                    "-c"
+                ]
+            },
+            "darwin": {
+                "executable": "/bin/bash",
+                "args": [
+                    "-c"
+                ]
+            }
+        },
+        "program": "<%= symbol_files[0]?.file ?? '' %>",
+        "programs": "<%= symbol_files.flatMap(e => (e.pname || !processors?.length) ? e : processors.map(p => ({ ...e, pname: p }))).groupedBy(v => v.pname ?? '') %>"
+    },
+    "launch": {
+        "singlecore-launch": {
+            "name": "Corstone-320 simulator (launch)",
+            "type": "gdbtarget",
+            "request": "launch",
+            "cwd": "<%= data.cwd %>",
+            "program": "<%= data.program %>",
+            "gdb": "arm-none-eabi-gdb",
+            "auxiliaryGdb": true,
+            "initCommands": [
+                "<%= data.programs[pname]?.slice(1)?.map(p => p.file ? `add-symbol-file \"${p.file}\"\\n` : '')?.join('') %>",
+                "monitor reset halt",
+                "tbreak main"
+            ],
+            "customResetCommands": [
+                "monitor reset halt",
+                "maintenance flush register-cache",
+                "maintenance flush dcache",
+                "tbreak main",
+                "continue"
+            ],
+            "target": {
+                "server": "cs320sim",
+                "serverParameters": [
+                    "gdbserver",
+                    "--cbuild-run",
+                    "${command:cmsis-csolution.getCbuildRunFile}",
+                    "--port",
+                    "<%= ports.get(pname) %>\n",
+                    "<% if (config.telnet) { %>",
+                    "--uart-tcp",
+                    "<%= config.telnet.port ?? 5000 %>\n",
+                    "<% } %>",
+                    "<% if (config.speed) { %>",
+                    "--speed",
+                    "<%= config.speed %>\n",
+                    "<% } %>",
+                    "<% if (config.headless) { %>",
+                    "--headless",
+                    "<% } %>",
+                    "--quiet"
+                ],
+                "port": "\"<%= ports.get(pname) %>\""
+            },
+            "cmsis": {
+                "cbuildRunFile": "${command:cmsis-csolution.getCbuildRunFile}",
+                "updateConfiguration": "auto"
+            }
+        },
+        "singlecore-attach": {
+            "name": "Corstone-320 simulator (attach)",
+            "type": "gdbtarget",
+            "request": "attach",
+            "cwd": "<%= data.cwd %>",
+            "program": "<%= data.program %>",
+            "gdb": "arm-none-eabi-gdb",
+            "auxiliaryGdb": true,
+            "initCommands": [
+                "<%= data.programs[pname]?.slice(1)?.map(p => p.file ? `add-symbol-file \"${p.file}\"\\n` : '')?.join('') %>"
+            ],
+            "customResetCommands": [
+                "monitor reset halt",
+                "maintenance flush register-cache",
+                "maintenance flush dcache",
+                "tbreak main",
+                "continue"
+            ],
+            "target": {
+                "port": "\"<%= ports.get(pname) %>\""
+            },
+            "cmsis": {
+                "cbuildRunFile": "${command:cmsis-csolution.getCbuildRunFile}",
+                "updateConfiguration": "auto"
+            }
+        }
+    },
+    "tasks": [
+        {
+            "label": "CMSIS Load",
+            "type": "shell",
+            "command": "cs320sim",
+            "options": {
+                "cwd": "<%= data.cwd %>",
+                "shell": "<%= data.shell[process.platform] %>"
+            },
+            "args": [
+                "load",
+                "--cbuild-run",
+                "${command:cmsis-csolution.getCbuildRunFile}"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "CMSIS Erase",
+            "type": "shell",
+            "command": "cs320sim",
+            "options": {
+                "cwd": "<%= data.cwd %>",
+                "shell": "<%= data.shell[process.platform] %>"
+            },
+            "args": [
+                "erase"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "CMSIS Run",
+            "type": "shell",
+            "command": "cs320sim",
+            "options": {
+                "cwd": "<%= data.cwd %>",
+                "shell": "<%= data.shell[process.platform] %>"
+            },
+            "args": [
+                "gdbserver",
+                "--cbuild-run",
+                "${command:cmsis-csolution.getCbuildRunFile}",
+                "--port",
+                "<%= ports.get(pname) %>\n",
+                "<% if (config.telnet) { %>",
+                "--uart-tcp",
+                "<%= config.telnet.port ?? 5000 %>\n",
+                "<% } %>",
+                "<% if (config.speed) { %>",
+                "--speed",
+                "<%= config.speed %>\n",
+                "<% } %>",
+                "<% if (config.headless) { %>",
+                "--headless",
+                "<% } %>",
+                "--quiet",
+                "--persist",
+                "--reset-run"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "CMSIS Load+Run",
+            "dependsOn": [
+                "CMSIS Load",
+                "CMSIS Run"
+            ],
+            "dependsOrder": "sequence",
+            "problemMatcher": []
+        },
+        {
+            "label": "CMSIS TargetInfo",
+            "type": "shell",
+            "command": "cs320sim",
+            "options": {
+                "cwd": "<%= data.cwd %>",
+                "shell": "<%= data.shell[process.platform] %>"
+            },
+            "args": [
+                "info",
+                "--cbuild-run",
+                "${command:cmsis-csolution.getCbuildRunFile}"
+            ],
+            "problemMatcher": []
+        }
+    ]
+}

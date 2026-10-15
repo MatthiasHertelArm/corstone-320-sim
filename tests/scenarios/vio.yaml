@@ -1,0 +1,8 @@
+# SSE_320_BSP Vio: writes a VIO value every second and prints it on UART0.
+- at: 1.5
+  expect-uart: "Vio value is set to 0"
+- at: 2.5
+  expect-uart: "Vio value is set to 1"
+- at: 3.5
+  expect-uart: "Vio value is set to 2"
+  exit: true

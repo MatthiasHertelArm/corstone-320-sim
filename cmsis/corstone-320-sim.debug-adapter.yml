@@ -1,0 +1,45 @@
+# Debug adapter entry for the CMSIS-Toolbox / CMSIS Solution catalog (debug-adapters.yml).
+# Installed by "cs320sim register-cmsis-adapter"; select it in a csolution with
+#   debugger:
+#     name: corstone-320-sim
+debug-adapters:
+  - name: "corstone-320-sim"
+    alias-name: ["cs320sim", "corstone-320"]
+    template: corstone-320-sim.adapter.json
+    defaults:
+      gdbserver:
+        active:
+        port: 3333
+      telnet:
+        port: 5000
+    user-interface:
+      - section: Simulation
+        description: BBC Corstone-320 simulator
+        options:
+          - name: Speed
+            description: Simulation speed factor (1 = real time) or max
+            yml-node: speed
+            type: string
+            default: "1"
+          - name: Headless
+            description: Run without the board window
+            yml-node: headless
+            type: enum
+            values:
+              - name: "No"
+                value: false
+                description: Show the board window
+              - name: "Yes"
+                value: true
+                description: No window; the UART goes to the terminal
+            default: false
+      - section: Telnet
+        description: Target UART on a TCP port (VS Code Serial Monitor, TCP mode)
+        yml-node: telnet
+        select: on
+        options:
+          - name: Port
+            description: TCP port of the UART
+            yml-node: port
+            type: number
+            default: 5000

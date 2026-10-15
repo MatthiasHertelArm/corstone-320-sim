@@ -1,0 +1,19 @@
+build-idx:
+  generated-by: csolution version 2.15.0
+  description: Blinky example
+  cdefault: cdefault.yml
+  csolution: Blinky.csolution.yml
+  tmpdir: tmp
+  cprojects:
+    - cproject: Blinky/Blinky.cproject.yml
+  cbuilds:
+    - cbuild: build/SSE-320-FVP/GCC/Debug/Blinky/outdir/Blinky.Debug+SSE-320-FVP.cbuild.yml
+      project: Blinky
+      configuration: .Debug+SSE-320-FVP
+      messages:
+        warnings:
+          - "'compiler' setting in cdefault.yml will be deprecated in CMSIS-Toolbox 3.0.0"
+          - customization of intermediate directory 'intdir' is ignored by the cbuild2cmake backend
+        info:
+          - Blinky.cbuild-pack.yml - file generated successfully
+          - Blinky.Debug+SSE-320-FVP.cbuild.yml - file generated successfully

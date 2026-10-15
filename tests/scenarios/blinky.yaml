@@ -1,0 +1,15 @@
+# SSE_320_BSP Blinky: banner on UART0, then the lit FPGA LED moves one position per second
+# (led_runner: the MPS4 has more than one user LED).
+- at: 0.5
+  expect-uart: "= Blinky is running ="
+- at: 0.6
+  expect-uart: "LED timer interval is set to 1s"
+- at: 0.9
+  expect-leds: "0000000000"
+- at: 1.5
+  expect-leds: "0000000001"
+- at: 2.5
+  expect-leds: "0000000010"
+- at: 3.5
+  expect-leds: "0000000100"
+  exit: true
