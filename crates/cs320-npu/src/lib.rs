@@ -865,7 +865,7 @@ impl Npu {
             *status |= STATUS_BUS_STATUS | STATUS_IRQ_RAISED;
             return Err((0, format!("command stream at {:#x} ({} bytes) is outside memory", self.qbase, qsize)));
         }
-        let words: Vec<u32> = words.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        let words: Vec<u32> = words.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c)).collect();
         let mut pc = 0usize;
         self.cycles += 32;
         loop {

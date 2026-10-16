@@ -290,12 +290,12 @@ fn decode_run<T: Elem>(buf: &[u8], esize: usize, signed: bool, zp: i64, dst: &mu
             }
         }
         (2, true) => {
-            for (d, b) in dst.iter_mut().zip(buf.chunks_exact(2)) {
+            for (d, b) in dst.iter_mut().zip(buf.as_chunks::<2>().0) {
                 *d = T::from_i64(i16::from_le_bytes([b[0], b[1]]) as i64 - zp);
             }
         }
         (4, true) => {
-            for (d, b) in dst.iter_mut().zip(buf.chunks_exact(4)) {
+            for (d, b) in dst.iter_mut().zip(buf.as_chunks::<4>().0) {
                 *d = T::from_i64(i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as i64 - zp);
             }
         }
@@ -316,17 +316,17 @@ fn encode_run(src: &[i64], esize: usize, buf: &mut [u8]) {
             }
         }
         2 => {
-            for (b, v) in buf.chunks_exact_mut(2).zip(src) {
+            for (b, v) in buf.as_chunks_mut::<2>().0.iter_mut().zip(src) {
                 b.copy_from_slice(&(*v as u16).to_le_bytes());
             }
         }
         4 => {
-            for (b, v) in buf.chunks_exact_mut(4).zip(src) {
+            for (b, v) in buf.as_chunks_mut::<4>().0.iter_mut().zip(src) {
                 b.copy_from_slice(&(*v as u32).to_le_bytes());
             }
         }
         _ => {
-            for (b, v) in buf.chunks_exact_mut(8).zip(src) {
+            for (b, v) in buf.as_chunks_mut::<8>().0.iter_mut().zip(src) {
                 b.copy_from_slice(&v.to_le_bytes());
             }
         }
