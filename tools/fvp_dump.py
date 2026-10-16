@@ -15,7 +15,7 @@ import socket
 import sys
 import time
 
-MAX_CHUNK = 256  # bytes per `m` request
+MAX_CHUNK = 256  # default bytes per `m` request (--chunk); the FVP returns zeros for multi-word reads of the PPB
 
 
 class Rsp:
@@ -139,11 +139,11 @@ def parse_ranges(path):
     return ranges
 
 
-def dump_range(rsp, start, end, out, stats):
+def dump_range(rsp, start, end, out, stats, chunk=MAX_CHUNK):
     out.write("# %s\n" % stats["name"])
     addr = start
     while addr < end:
-        n = min(MAX_CHUNK, end - addr)
+        n = min(chunk, end - addr)
         n -= n % 4
         data = rsp.read_mem(addr, n)
         if data is None:
@@ -172,6 +172,7 @@ def main():
     ap.add_argument("--regs", action="store_true", help="print the g packet and p0..p40 raw")
     ap.add_argument("--header", action="append", default=[], help="extra header comment line(s)")
     ap.add_argument("--timeout", type=float, default=10.0)
+    ap.add_argument("--chunk", type=int, default=MAX_CHUNK, help="bytes per m request (4 = one word; the FVP GDB server returns zeros for larger reads of the PPB and some peripherals)")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -197,12 +198,13 @@ def main():
     out.write("# Memory dump through the GDB Remote Serial Protocol, %s\n" % time.strftime("%Y-%m-%d %H:%M:%S"))
     out.write("# qSupported: %s\n" % (sup.decode(errors="replace") if sup else "(none)"))
     out.write("# ?: %s\n" % (halt.decode(errors="replace") if halt else "(none)"))
+    out.write("# read size: %d bytes per m request\n" % args.chunk)
     for h in args.header:
         out.write("# %s\n" % h)
     total = {"ok": 0, "err": 0}
     for start, end, name in parse_ranges(args.ranges):
         stats = {"name": name, "ok": 0, "err": 0}
-        dump_range(rsp, start, end, out, stats)
+        dump_range(rsp, start, end, out, stats, chunk=max(4, args.chunk - args.chunk % 4))
         total["ok"] += stats["ok"]
         total["err"] += stats["err"]
         print("%-60s %5d words, %d errors" % (name, stats["ok"], stats["err"]), file=sys.stderr)

@@ -3,7 +3,7 @@
 //! (serial configuration controller) register file of the FPGA.
 
 use crate::env::{narrow, widen, Env};
-use cs320_core::time::{TICKS_PER_SEC, FracPeriod};
+use cs320_core::time::{FracPeriod, TICKS_PER_SEC};
 use cs320_core::Ticks;
 
 pub struct FpgaIo {
@@ -106,7 +106,8 @@ impl Scc {
     }
 
     pub fn reset(&mut self) {
-        self.cfg = [0; 8];
+        // CFG_REG0..7 as the FVP reports them at reset
+        self.cfg = std::array::from_fn(|i| crate::fvp::word(0x4820_0000 + 4 * i as u32).unwrap_or(0));
         self.cfgdata_rtn = 0;
         self.cfgdata_out = 0;
         self.cfgctrl = 0;
@@ -124,7 +125,7 @@ impl Scc {
             0x100 => self.dll,
             0xFF8 => 0x0000_0020, // AID: FPGA build
             0xFFC => 0x4104_7220, // ID: MPS4, Corstone-320 image, revision
-            _ => 0,
+            o => crate::fvp::word(0x4820_0000 + o).unwrap_or(0),
         };
         narrow(v, off, size)
     }

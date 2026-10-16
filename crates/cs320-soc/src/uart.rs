@@ -41,7 +41,18 @@ pub struct CmsdkUart {
 
 impl CmsdkUart {
     pub fn new(n: usize) -> Self {
-        CmsdkUart { n, ctrl: 0, state: 0, intstatus: 0, bauddiv: 0, tx_data: 0, rx_data: 0, host_rx: VecDeque::new(), rx_busy: false, loopback: VecDeque::new() }
+        CmsdkUart {
+            n,
+            ctrl: 0,
+            state: 0,
+            intstatus: 0,
+            bauddiv: 0,
+            tx_data: 0,
+            rx_data: 0,
+            host_rx: VecDeque::new(),
+            rx_busy: false,
+            loopback: VecDeque::new(),
+        }
     }
 
     pub fn reset(&mut self) {

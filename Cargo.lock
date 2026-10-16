@@ -911,11 +911,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cs320-npu"
+version = "0.1.0"
+dependencies = [
+ "env_logger",
+ "log",
+]
+
+[[package]]
 name = "cs320-soc"
 version = "0.1.0"
 dependencies = [
  "cs320-core",
  "cs320-cpu",
+ "cs320-npu",
  "log",
 ]
 

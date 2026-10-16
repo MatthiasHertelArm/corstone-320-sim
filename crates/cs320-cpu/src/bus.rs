@@ -53,9 +53,22 @@ pub trait Bus {
     /// Interrupt line levels when they changed since the last call.
     fn take_irq_lines(&mut self) -> Option<IrqLines>;
 
+    /// IDAU region number of an address for TT (`None` for exempt regions). The SSE-320 IDAU
+    /// numbers the 256 MB blocks 0..13, the PPB is exempt, 0xE010_0000.. is region 15, the
+    /// 0xF000_0000 system region is exempt and 0xF100_0000.. is region 17 (measured on the FVP).
+    fn idau_region(&self, addr: u32) -> Option<u32> {
+        match addr >> 24 {
+            0x00..=0xDF => Some(addr >> 28),
+            0xE0 if addr < 0xE010_0000 => None,
+            0xE0..=0xEF => Some(15),
+            0xF0 => None,
+            _ => Some(17),
+        }
+    }
+
     /// Security attribute of an address from the system's IDAU.
     fn idau(&self, addr: u32) -> Idau {
-        if addr >= 0xE000_0000 && addr < 0xE010_0000 {
+        if (0xE000_0000..0xE010_0000).contains(&addr) {
             Idau::Exempt
         } else if addr & 0x1000_0000 == 0 {
             Idau::NonSecure

@@ -49,9 +49,11 @@ impl Default for Machine {
 
 impl Machine {
     pub fn new(params: Params) -> Self {
+        let mut cpu = Cpu::new();
+        cpu.pacbti = params.pacbti;
         let sys = System::new(Cs320Board::new(), params);
         let mut m = Machine {
-            cpu: Cpu::new(),
+            cpu,
             sys,
             halt_on_lockup: false,
             resets: 0,
@@ -74,6 +76,10 @@ impl Machine {
                     return Err(format!("image byte at {a:#010x} is outside the memories"));
                 }
             }
+        }
+        // the reset vector base is the image's vector table, so the core boots the image
+        if let Some(vtor) = img.vector_table() {
+            self.sys.sysctrl.set_initsvtor_rst(vtor);
         }
         Ok(())
     }

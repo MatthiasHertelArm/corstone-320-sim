@@ -23,6 +23,28 @@ pub struct Image {
     pub path: Option<PathBuf>,
 }
 
+impl Image {
+    /// The vector table of the image: the 128-byte aligned address whose reset vector (word 1)
+    /// is the entry point, found in the loaded bytes. None when no such table is loaded.
+    pub fn vector_table(&self) -> Option<u32> {
+        let entry = self.entry? & !1;
+        for seg in &self.segments {
+            let end = seg.addr as u64 + seg.data.len() as u64;
+            let first = (seg.addr + 127) & !127;
+            let mut a = first as u64;
+            while a + 8 <= end {
+                let o = (a - seg.addr as u64) as usize;
+                let reset = u32::from_le_bytes([seg.data[o + 4], seg.data[o + 5], seg.data[o + 6], seg.data[o + 7]]);
+                if reset & !1 == entry {
+                    return Some(a as u32);
+                }
+                a += 128;
+            }
+        }
+        None
+    }
+}
+
 #[derive(Debug)]
 pub struct LoadError(pub String);
 

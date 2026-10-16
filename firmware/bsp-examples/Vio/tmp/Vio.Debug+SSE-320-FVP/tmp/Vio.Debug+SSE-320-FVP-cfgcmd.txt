@@ -1,1 +1,0 @@
-cmd='/opt/homebrew/bin/cmake;-G;Ninja;-S;<SOURCE_DIR>;-B;<BINARY_DIR>;-DSOLUTION_ROOT=/Users/mather01/Projects/corstone-320-sim/firmware/bsp-examples/Vio;-DCMSIS_PACK_ROOT=/Users/mather01/.cache/arm/packs;-DCMSIS_COMPILER_ROOT=/Users/mather01/.vcpkg/artifacts/2139c4c6/tools.open.cmsis.pack.cmsis.toolbox/2.15.0/etc'

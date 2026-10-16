@@ -136,7 +136,7 @@ impl Dma350 {
         }
         let c = &mut self.ch[i];
         c.status |= 1 << 16; // STAT_DONE
-        // the source and destination addresses advance
+                             // the source and destination addresses advance
         c.regs.insert(0x10, (src as i64 + n as i64 * srcinc * transize as i64) as u32);
         c.regs.insert(0x18, (dst as i64 + n as i64 * desinc * transize as i64) as u32);
     }

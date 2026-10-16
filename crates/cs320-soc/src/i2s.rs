@@ -72,7 +72,8 @@ impl AudioI2s {
     }
 
     pub fn irq(&self) -> bool {
-        (self.control & 2 != 0 && self.control & 1 != 0 && self.tx_irq_cond()) || (self.control & 8 != 0 && self.control & 4 != 0 && self.rx_irq_cond())
+        (self.control & 2 != 0 && self.control & 1 != 0 && self.tx_irq_cond())
+            || (self.control & 8 != 0 && self.control & 4 != 0 && self.rx_irq_cond())
     }
 
     fn status(&self) -> u32 {

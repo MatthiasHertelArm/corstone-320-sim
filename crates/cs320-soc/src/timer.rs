@@ -27,8 +27,9 @@ impl SysCounter {
     }
 
     pub fn reset(&mut self, now: Ticks, start_enabled: bool) {
-        // the FVP starts the counter at reset (refcounter.non_arch_start_at_default)
-        self.cntcr = if start_enabled { 1 } else { 0 };
+        // the FVP starts the counter at reset (refcounter.non_arch_start_at_default); CNTCR
+        // reads 0x101 (EN and FCREQ0)
+        self.cntcr = if start_enabled { 0x101 } else { 0x100 };
         self.base = 0;
         self.origin = now;
     }
@@ -72,7 +73,8 @@ impl SysCounter {
     pub fn read_ctrl(&mut self, env: &mut Env, off: u32, size: u8) -> u32 {
         let v = match off & !3 {
             0x000 => self.cntcr,
-            0x004 => 0,
+            0x004 => 0x100,          // CNTSR: FCACK0
+            0x020 => self.hz as u32, // CNTFID0
             0x008 => self.value(env.now) as u32,
             0x00C => (self.value(env.now) >> 32) as u32,
             0x010 | 0x0D0 => self.cntscr0,
@@ -89,7 +91,7 @@ impl SysCounter {
             0x000 => {
                 let was = self.enabled();
                 let cur = self.value(now);
-                self.cntcr = widen(self.cntcr, off, size, v) & 0x1F;
+                self.cntcr = (widen(self.cntcr, off, size, v) & 0x1F) | 0x100;
                 if was != self.enabled() {
                     self.set_value(now, cur);
                 }
@@ -270,18 +272,26 @@ pub struct CmsdkTimer {
     origin: Ticks,
     period: FracPeriod,
     slot: Slot,
+    slowclk: bool,
 }
 
 impl CmsdkTimer {
     pub fn new(hz: u64, slot: Slot) -> Self {
-        CmsdkTimer { ctrl: 0, reload: 0, intstatus: 0, base_value: 0, origin: 0, period: FracPeriod::from_hz(hz), slot }
+        CmsdkTimer { ctrl: 0, reload: 0, intstatus: 0, base_value: 0, origin: 0, period: FracPeriod::from_hz(hz), slot, slowclk: false }
+    }
+
+    /// The SLOWCLK timer instance: the FVP resets it with CTRL = 8 and VALUE/RELOAD = 0xFFFF_FFFF.
+    pub fn slowclk(mut self) -> Self {
+        self.slowclk = true;
+        self.reset(0);
+        self
     }
 
     pub fn reset(&mut self, now: Ticks) {
-        self.ctrl = 0;
+        self.ctrl = if self.slowclk { 8 } else { 0 };
         self.reload = 0;
         self.intstatus = 0;
-        self.base_value = 0;
+        self.base_value = if self.slowclk { 0xFFFF_FFFF } else { 0 };
         self.origin = now;
     }
 

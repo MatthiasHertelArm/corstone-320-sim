@@ -14,6 +14,7 @@ mod uart;
 
 use cli::Config;
 use cs320_board::runtime::{Cmd, Input, Options, Simulator, Speed};
+use cs320_board::sources::{CameraSource, MicSource};
 use cs320_board::Machine;
 use cs320_loader::cbuild_run::RunConfig;
 use cs320_loader::Image;
@@ -46,10 +47,6 @@ fn main() {
     }
     if cfg.version {
         println!("cs320sim {} (Corstone-320 simulator: Cortex-M85, SSE-320, MPS4 peripherals)", env!("CARGO_PKG_VERSION"));
-        return;
-    }
-    if cfg.list_params {
-        print!("{}", cli::param_list());
         return;
     }
     if let Err(e) = run(cfg) {
@@ -171,9 +168,6 @@ fn images_of(cfg: &Config) -> Result<Vec<Image>, String> {
 }
 
 fn run(cfg: Config) -> Result<(), String> {
-    for p in &cfg.ignored_params {
-        log::info!("FVP parameter {p} is accepted and ignored");
-    }
     let images = images_of(&cfg)?;
     let mut m = Machine::new(cfg.params.clone());
     for img in &images {
@@ -184,11 +178,23 @@ fn run(cfg: Config) -> Result<(), String> {
     if cfg.semihosting {
         m.semihosting = true;
     }
+    let camera_slot = m.sys.board.camera.live.clone();
     m.sys.board.camera.set_source(cfg.camera.clone());
+    let mic_slot = m.sys.board.mic.live.clone();
     m.sys.board.mic.set_source(cfg.mic.clone());
     if let Some(e) = &m.sys.board.camera.error {
         return Err(format!("camera: {e}"));
     }
+    // a host microphone feeds its live slot for as long as this run lasts
+    let _host_mic = match cfg.mic {
+        MicSource::Live => Some(cs320_board::sources::HostMic::start(mic_slot, cfg.mic_device)?),
+        _ => None,
+    };
+    // a host webcam feeds the live slot for as long as this run lasts
+    let _webcam = match cfg.camera {
+        CameraSource::Live => Some(cs320_board::sources::Webcam::start(camera_slot, cfg.camera_device, 640, 480)?),
+        _ => None,
+    };
     if let Some(e) = &m.sys.board.mic.error {
         return Err(format!("microphone: {e}"));
     }
@@ -254,7 +260,11 @@ fn run(cfg: Config) -> Result<(), String> {
     headless_wait(&sim, &cfg, scenario)
 }
 
-fn headless_wait(sim: &Simulator, cfg: &Config, scenario: Option<std::sync::Arc<std::sync::Mutex<scenario::Results>>>) -> Result<(), String> {
+fn headless_wait(
+    sim: &Simulator,
+    cfg: &Config,
+    scenario: Option<std::sync::Arc<std::sync::Mutex<scenario::Results>>>,
+) -> Result<(), String> {
     let report = |code: i32| {
         if let Some(r) = &scenario {
             let r = r.lock().unwrap();

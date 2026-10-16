@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/cs320-core",
     "crates/cs320-cpu",
+    "crates/cs320-npu",
     "crates/cs320-soc",
     "crates/cs320-loader",
     "crates/cs320-board",
@@ -21,6 +22,7 @@ repository = "https://github.com/MatthiasHertelArm/corstone-320-sim"
 [workspace.dependencies]
 cs320-core = { path = "crates/cs320-core" }
 cs320-cpu = { path = "crates/cs320-cpu" }
+cs320-npu = { path = "crates/cs320-npu" }
 cs320-soc = { path = "crates/cs320-soc" }
 cs320-board = { path = "crates/cs320-board" }
 cs320-loader = { path = "crates/cs320-loader" }

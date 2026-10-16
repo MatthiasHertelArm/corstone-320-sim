@@ -3,3 +3,5 @@
 .DS_Store
 /firmware/*/out
 /fixtures/fvp/*.log
+/firmware/bsp-examples/*/build
+/firmware/bsp-examples/*/tmp

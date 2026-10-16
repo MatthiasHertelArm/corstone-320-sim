@@ -1,8 +1,6 @@
 //! Thumb and Thumb-2 decoder for Armv8.1-M Mainline with the FPv5 (SP, DP, HP) extension.
 //!
 
-
-
 /// Data-processing operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DpOp {
@@ -22,6 +20,27 @@ pub enum DpOp {
     Teq,
     Cmp,
     Cmn,
+}
+
+/// The Armv8.1-M scalar shifts (`Instr::LongShift`): the 64-bit ones on an even/odd register
+/// pair, the last six on one register. The compiler uses LSLL/LSRL/ASRL for 64-bit shifts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LongShiftOp {
+    Lsll,
+    Lsrl,
+    Asrl,
+    Sqshll,
+    Srshrl,
+    Uqshll,
+    Urshrl,
+    Sqrshrl,
+    Uqrshll,
+    Sqshl,
+    Srshr,
+    Uqshl,
+    Urshr,
+    Sqrshr,
+    Uqrshl,
 }
 
 /// When an instruction updates the condition flags.
@@ -667,6 +686,18 @@ pub enum Instr {
         imm: u32,
     },
     Clrex,
+    /// LDA/LDAB/LDAH (load-acquire, `size` 1/2/4).
+    Lda {
+        size: u8,
+        rt: u8,
+        rn: u8,
+    },
+    /// STL/STLB/STLH (store-release).
+    Stl {
+        size: u8,
+        rt: u8,
+        rn: u8,
+    },
     /// PLD/PLI and other no-operation memory hints.
     MemHint,
     Mrs {
@@ -703,6 +734,17 @@ pub enum Instr {
         rn: u8,
         rm: u8,
         cond: u8,
+    },
+    /// Armv8.1-M scalar shift (LSLL, ASRL, SQRSHRL, ...) of the 64-bit `rda_hi:rda_lo`, or of
+    /// `rda_lo` alone when `rda_hi` is 15; the amount is `imm` (1..=32) when `rm` is 15, else
+    /// the signed low byte of `rm`. `sat48`: the 48-bit saturation of SQRSHRL/UQRSHLL.
+    LongShift {
+        op: LongShiftOp,
+        rda_lo: u8,
+        rda_hi: u8,
+        rm: u8,
+        imm: u8,
+        sat48: bool,
     },
     /// Test target: TT (`alt` = TTA, `unpriv` = TTT).
     Tt {
@@ -1099,6 +1141,12 @@ fn decode_dual_excl(h1: u32, h2: u32) -> Instr {
             (_, 0) => match op3 {
                 0b0100 => Strex { size: 1, rd: r4(h2, 0), rt, rn, imm: 0 },
                 0b0101 => Strex { size: 2, rd: r4(h2, 0), rt, rn, imm: 0 },
+                0b1000 => Stl { size: 1, rt, rn },
+                0b1001 => Stl { size: 2, rt, rn },
+                0b1010 => Stl { size: 4, rt, rn },
+                0b1100 => Strex { size: 1, rd: r4(h2, 0), rt, rn, imm: 0 },
+                0b1101 => Strex { size: 2, rd: r4(h2, 0), rt, rn, imm: 0 },
+                0b1110 => Strex { size: 4, rd: r4(h2, 0), rt, rn, imm: 0 },
                 _ => Undefined,
             },
             _ => match op3 {
@@ -1106,6 +1154,12 @@ fn decode_dual_excl(h1: u32, h2: u32) -> Instr {
                 0b0001 => Tb { half: true, rn, rm: r4(h2, 0) },
                 0b0100 => Ldrex { size: 1, rt, rn, imm: 0 },
                 0b0101 => Ldrex { size: 2, rt, rn, imm: 0 },
+                0b1000 => Lda { size: 1, rt, rn },
+                0b1001 => Lda { size: 2, rt, rn },
+                0b1010 => Lda { size: 4, rt, rn },
+                0b1100 => Ldrex { size: 1, rt, rn, imm: 0 },
+                0b1101 => Ldrex { size: 2, rt, rn, imm: 0 },
+                0b1110 => Ldrex { size: 4, rt, rn, imm: 0 },
                 _ => Undefined,
             },
         }
@@ -1121,6 +1175,64 @@ fn decode_dual_excl(h1: u32, h2: u32) -> Instr {
     }
 }
 
+/// The Armv8.1-M scalar shifts, in the `ORRS Rd, Rn, {SP,PC}` space (`1110 1010 0101 ...` with
+/// bit 15 of the second halfword clear): bits 3:0 `1111` immediate (imm3:imm2, 0 = 32), `1101`
+/// register (Rm in 15:12, bit 7 = 48-bit saturation); bits 11:8 `1111` for the 32-bit forms on
+/// Rda (first halfword 3:0), else the even RdaLo (first halfword 3:1) and odd RdaHi (11:9) with
+/// bit 0 of the first halfword selecting the saturating/rounding group; bits 5:4 the operation.
+fn decode_long_shift(h1: u32, h2: u32) -> Option<Instr> {
+    use LongShiftOp::*;
+    let reg = h2 & 0xF == 0xD;
+    let kind = (h2 >> 4) & 3;
+    let imm = ((((h2 >> 12) & 7) << 2) | ((h2 >> 6) & 3)) as u8;
+    let imm = if reg {
+        0
+    } else if imm == 0 {
+        32
+    } else {
+        imm
+    };
+    let rm = if reg { r4(h2, 12) } else { 15 };
+    if (h2 >> 8) & 0xF == 0xF {
+        let op = match (reg, kind) {
+            (false, 0) => Uqshl,
+            (false, 1) => Urshr,
+            (false, 2) => Srshr,
+            (false, 3) => Sqshl,
+            (true, 0) => Uqrshl,
+            (true, 2) => Sqrshr,
+            _ => return None,
+        };
+        return Some(Instr::LongShift { op, rda_lo: r4(h1, 0), rda_hi: 15, rm, imm, sat48: false });
+    }
+    if (h2 >> 8) & 1 == 0 {
+        return None;
+    }
+    let sat = h1 & 1 == 1;
+    let op = match (reg, sat, kind) {
+        (false, false, 0) => Lsll,
+        (false, false, 1) => Lsrl,
+        (false, false, 2) => Asrl,
+        (false, true, 0) => Uqshll,
+        (false, true, 1) => Urshrl,
+        (false, true, 2) => Srshrl,
+        (false, true, 3) => Sqshll,
+        (true, false, 0) => Lsll,
+        (true, false, 2) => Asrl,
+        (true, true, 0) => Uqrshll,
+        (true, true, 2) => Sqrshrl,
+        _ => return None,
+    };
+    Some(Instr::LongShift {
+        op,
+        rda_lo: (h1 & 0xE) as u8,
+        rda_hi: ((h2 >> 8) & 0xE) as u8 | 1,
+        rm,
+        imm,
+        sat48: reg && sat && (h2 >> 7) & 1 == 1,
+    })
+}
+
 fn decode_dp_shifted(h1: u32, h2: u32) -> Instr {
     use Instr::*;
     let op = (h1 >> 5) & 0xF;
@@ -1132,8 +1244,18 @@ fn decode_dp_shifted(h1: u32, h2: u32) -> Instr {
     let ty = (h2 >> 4) & 3;
     let shift = Shift::imm(ty, imm5);
     let test = rd == 15 && s == SetFlags::Yes;
+    // ORRS with Rm = SP or PC is UNPREDICTABLE in Armv7-M; Armv8.1-M puts the scalar shifts there.
+    if op == 0b0010 && s == SetFlags::Yes && h2 & 0x8000 == 0 && matches!(h2 & 0xF, 0xD | 0xF) {
+        if let Some(i) = decode_long_shift(h1, h2) {
+            return i;
+        }
+    }
     if h2 & 0x8000 != 0 {
         if op == 0b0010 && s == SetFlags::Yes {
+            if (h2 >> 5) & 7 == 7 {
+                // cond 111x: no AL form (the FVP takes an UNDEFINED UsageFault)
+                return Undefined;
+            }
             return Csel { op: ((h2 >> 12) & 3) as u8, rd, rn, rm, cond: ((h2 >> 4) & 0xF) as u8 };
         }
         return Undefined;
@@ -1537,7 +1659,6 @@ fn decode_long_multiply(h1: u32, h2: u32) -> Instr {
     }
 }
 
-
 /// Low-overhead branch and branch-future group (`1111 0xxx ... 11x0 ... 1`).
 fn decode_lob(h1: u32, h2: u32) -> Instr {
     use Instr::*;
@@ -1564,7 +1685,11 @@ fn decode_lob(h1: u32, h2: u32) -> Instr {
         if rn == 15 {
             return if f == 0 { Lctp } else { Undefined };
         }
-        return if f & 4 != 0 { LoopStart { rn, imm: 0, while_: false, tp: 0 } } else { LoopStart { rn, imm: 0, while_: false, tp: 1 << ((h1 >> 4) & 3) } };
+        return if f & 4 != 0 {
+            LoopStart { rn, imm: 0, while_: false, tp: 0 }
+        } else {
+            LoopStart { rn, imm: 0, while_: false, tp: 1 << ((h1 >> 4) & 3) }
+        };
     }
     if h2 & 0xF000 == 0xC000 {
         if rn == 15 {
@@ -1575,7 +1700,11 @@ fn decode_lob(h1: u32, h2: u32) -> Instr {
                 _ => Undefined,
             };
         }
-        return if f & 4 != 0 { LoopStart { rn, imm, while_: true, tp: 0 } } else { LoopStart { rn, imm, while_: true, tp: 1 << ((h1 >> 4) & 3) } };
+        return if f & 4 != 0 {
+            LoopStart { rn, imm, while_: true, tp: 0 }
+        } else {
+            LoopStart { rn, imm, while_: true, tp: 1 << ((h1 >> 4) & 3) }
+        };
     }
     Undefined
 }
@@ -1628,11 +1757,13 @@ fn decode_coproc(h1: u32, h2: u32) -> Instr {
         0xA => Prec::S,
         0xB => Prec::D,
         0xE | 0xF => return Mve(enc),
+        // 1111 110x ... coprocessor 8: VCADD.F/VCMLA.F
+        0x8 if h1 & 0x1000 != 0 => return Mve(enc),
         _ => return NoCoproc,
     };
     let double = prec == Prec::D;
     let op1 = (h1 >> 4) & 0x3F;
-    if h1 >> 9 == 0b1111_111 {
+    if h1 >> 9 == 0b111_1111 {
         // 1111 1110 ...: VSEL, VMAXNM/VMINNM, VRINT{A,N,P,M}, VCVT{A,N,P,M}, VINS, VMOVX
         if h2 & 0x10 != 0 || op1 & 0b100000 == 0 {
             return Mve(enc);
@@ -1641,7 +1772,8 @@ fn decode_coproc(h1: u32, h2: u32) -> Instr {
         let n = fp_reg(prec, h1 & 0xF, (h2 >> 7) & 1);
         let m = fp_reg(prec, h2 & 0xF, (h2 >> 5) & 1);
         let sd = (((h2 >> 12) & 0xF) << 1 | (h1 >> 6) & 1) as u8;
-        return match (h1 >> 4) & 0xF {
+        // hw1[6] is the D register bit, not part of the opcode
+        return match (h1 >> 4) & 0xB {
             0x0..=0x3 => {
                 let cc = ((h1 >> 4) & 3) as u8;
                 if h2 & 0x40 != 0 {
@@ -1649,44 +1781,41 @@ fn decode_coproc(h1: u32, h2: u32) -> Instr {
                 }
                 Vfp(self::Vfp::Vsel { cond: cc, prec, d, n, m })
             }
-            opc => {
-                match opc {
-                    0b1000 => Vfp(self::Vfp::MaxMinNm { max: h2 & 0x40 == 0, prec, d, n, m }),
-                    0b1011 => {
-                        let o = h1 & 0xF;
-                        match o {
-                            0b0000 if prec != Prec::D && h2 & 0x40 != 0 => {
-                                if h2 & 0x80 != 0 {
-                                    Vfp(self::Vfp::Vins { d: sd, m: m })
-                                } else {
-                                    Vfp(self::Vfp::Vmovx { d: sd, m: m })
-                                }
+            opc => match opc {
+                0b1000 => Vfp(self::Vfp::MaxMinNm { max: h2 & 0x40 == 0, prec, d, n, m }),
+                0b1011 => {
+                    let o = h1 & 0xF;
+                    match o {
+                        0b0000 if prec != Prec::D && h2 & 0x40 != 0 => {
+                            if h2 & 0x80 != 0 {
+                                Vfp(self::Vfp::Vins { d: sd, m })
+                            } else {
+                                Vfp(self::Vfp::Vmovx { d: sd, m })
                             }
-                            0b1000..=0b1011 if h2 & 0xC0 == 0x40 => {
-                                let mode = match o & 3 {
-                                    0 => RintMode::A,
-                                    1 => RintMode::N,
-                                    2 => RintMode::P,
-                                    _ => RintMode::M,
-                                };
-                                Vfp(self::Vfp::Rint { mode, prec, d, m })
-                            }
-                            0b1100..=0b1111 if h2 & 0x40 != 0 => {
-                                let mode = match o & 3 {
-                                    0 => RintMode::A,
-                                    1 => RintMode::N,
-                                    2 => RintMode::P,
-                                    _ => RintMode::M,
-                                };
-                                Vfp(self::Vfp::CvtRound { mode, signed: h2 & 0x80 != 0, prec, sd, m })
-                            }
-                            _ => Undefined,
                         }
+                        0b1000..=0b1011 if h2 & 0xC0 == 0x40 => {
+                            let mode = match o & 3 {
+                                0 => RintMode::A,
+                                1 => RintMode::N,
+                                2 => RintMode::P,
+                                _ => RintMode::M,
+                            };
+                            Vfp(self::Vfp::Rint { mode, prec, d, m })
+                        }
+                        0b1100..=0b1111 if h2 & 0x40 != 0 => {
+                            let mode = match o & 3 {
+                                0 => RintMode::A,
+                                1 => RintMode::N,
+                                2 => RintMode::P,
+                                _ => RintMode::M,
+                            };
+                            Vfp(self::Vfp::CvtRound { mode, signed: h2 & 0x80 != 0, prec, sd, m })
+                        }
+                        _ => Undefined,
                     }
-                    _ => Undefined,
                 }
-            }
-            _ => Undefined,
+                _ => Undefined,
+            },
         };
     }
     if op1 & 0b100000 == 0 {
@@ -1699,7 +1828,7 @@ fn decode_coproc(h1: u32, h2: u32) -> Instr {
         let rn = r4(h1, 0);
         let vd = (h2 >> 12) & 0xF;
         let imm8 = h2 & 0xFF;
-        if prec == Prec::H && !(p && !w) {
+        if prec == Prec::H && (!p || w) {
             return Undefined;
         }
         if !p && !u {
@@ -1894,7 +2023,17 @@ mod tests {
     #[test]
     fn thirty_two_bit() {
         assert_eq!(decode(0xF000, 0xF800), Instr::Bl { imm: 0 });
-        assert_eq!(decode(0xF8D1, 0x0004), Instr::Ldr { size: 4, signed: false, unpriv: false, rt: 0, rn: 1, addr: Addr::Imm { imm: 4, add: true, index: true, wback: false } });
+        assert_eq!(
+            decode(0xF8D1, 0x0004),
+            Instr::Ldr {
+                size: 4,
+                signed: false,
+                unpriv: false,
+                rt: 0,
+                rn: 1,
+                addr: Addr::Imm { imm: 4, add: true, index: true, wback: false }
+            }
+        );
         assert_eq!(decode(0xE92D, 0x4FF0), Instr::Stm { rn: 13, regs: 0x4FF0, wback: true, db: true });
         assert_eq!(decode(0xFBB0, 0xF0F1), Instr::Div { signed: false, rd: 0, rn: 0, rm: 1 });
         assert_eq!(decode(0xEE30, 0x0A20), Instr::Vfp(Vfp::Arith { op: VArith::Add, prec: Prec::S, d: 0, n: 0, m: 1 }));
@@ -1925,6 +2064,32 @@ mod tests {
         assert_eq!(decode(0xEA51, 0x8002), Instr::Csel { op: 0, rd: 0, rn: 1, rm: 2, cond: 0 });
         assert_eq!(decode(0xEA51, 0xB032), Instr::Csel { op: 3, rd: 0, rn: 1, rm: 2, cond: 3 });
         assert_eq!(decode(0xEA5F, 0x901F), Instr::Csel { op: 1, rd: 0, rn: 15, rm: 15, cond: 1 });
+        // the scalar shifts (encodings from armclang 6.24)
+        let ls = |op, rda_lo, rda_hi, rm, imm, sat48| Instr::LongShift { op, rda_lo, rda_hi, rm, imm, sat48 };
+        assert_eq!(decode(0xEA50, 0x014F), ls(LongShiftOp::Lsll, 0, 1, 15, 1, false));
+        assert_eq!(decode(0xEA50, 0x410F), ls(LongShiftOp::Lsll, 0, 1, 15, 16, false));
+        assert_eq!(decode(0xEA50, 0x010F), ls(LongShiftOp::Lsll, 0, 1, 15, 32, false));
+        assert_eq!(decode(0xEA52, 0x430F), ls(LongShiftOp::Lsll, 2, 3, 15, 16, false));
+        assert_eq!(decode(0xEA50, 0x412F), ls(LongShiftOp::Asrl, 0, 1, 15, 16, false));
+        assert_eq!(decode(0xEA50, 0x011F), ls(LongShiftOp::Lsrl, 0, 1, 15, 32, false));
+        assert_eq!(decode(0xEA54, 0x650D), ls(LongShiftOp::Lsll, 4, 5, 6, 0, false));
+        assert_eq!(decode(0xEA50, 0x212D), ls(LongShiftOp::Asrl, 0, 1, 2, 0, false));
+        assert_eq!(decode(0xEA51, 0x01FF), ls(LongShiftOp::Sqshll, 0, 1, 15, 3, false));
+        assert_eq!(decode(0xEA51, 0x01EF), ls(LongShiftOp::Srshrl, 0, 1, 15, 3, false));
+        assert_eq!(decode(0xEA51, 0x01CF), ls(LongShiftOp::Uqshll, 0, 1, 15, 3, false));
+        assert_eq!(decode(0xEA51, 0x01DF), ls(LongShiftOp::Urshrl, 0, 1, 15, 3, false));
+        assert_eq!(decode(0xEA51, 0x212D), ls(LongShiftOp::Sqrshrl, 0, 1, 2, 0, false));
+        assert_eq!(decode(0xEA51, 0x21AD), ls(LongShiftOp::Sqrshrl, 0, 1, 2, 0, true));
+        assert_eq!(decode(0xEA51, 0x210D), ls(LongShiftOp::Uqrshll, 0, 1, 2, 0, false));
+        assert_eq!(decode(0xEA51, 0x218D), ls(LongShiftOp::Uqrshll, 0, 1, 2, 0, true));
+        assert_eq!(decode(0xEA50, 0x0FFF), ls(LongShiftOp::Sqshl, 0, 15, 15, 3, false));
+        assert_eq!(decode(0xEA50, 0x0FEF), ls(LongShiftOp::Srshr, 0, 15, 15, 3, false));
+        assert_eq!(decode(0xEA50, 0x0FCF), ls(LongShiftOp::Uqshl, 0, 15, 15, 3, false));
+        assert_eq!(decode(0xEA50, 0x0FDF), ls(LongShiftOp::Urshr, 0, 15, 15, 3, false));
+        assert_eq!(decode(0xEA50, 0x2F2D), ls(LongShiftOp::Sqrshr, 0, 15, 2, 0, false));
+        assert_eq!(decode(0xEA50, 0x2F0D), ls(LongShiftOp::Uqrshl, 0, 15, 2, 0, false));
+        // an ORRS with an ordinary Rm stays an ORRS
+        assert!(matches!(decode(0xEA50, 0x4102), Instr::DpReg { op: DpOp::Orr, .. }));
         assert_eq!(decode(0xE841, 0xF0C0), Instr::Tt { rd: 0, rn: 1, alt: true, unpriv: true });
         assert_eq!(decode(0xE97F, 0xE97F), Instr::Sg);
         assert_eq!(decode(0xE89F, 0x8013), Instr::Clrm { regs: 0x8013 });
@@ -1953,7 +2118,10 @@ mod tests {
         assert_eq!(decode(0xEE31, 0x0B02), Instr::Vfp(Vfp::Arith { op: VArith::Add, prec: Prec::D, d: 0, n: 1, m: 2 }));
         assert_eq!(decode(0xEEA1, 0x0B02), Instr::Vfp(Vfp::Arith { op: VArith::Fma, prec: Prec::D, d: 0, n: 1, m: 2 }));
         assert_eq!(decode(0xEEB7, 0x0B00), Instr::Vfp(Vfp::MovImm { prec: Prec::D, d: 0, imm: 0x3FF0_0000_0000_0000 }));
-        assert_eq!(decode(0xEEBE, 0x0BCE), Instr::Vfp(Vfp::CvtFixed { to_fixed: true, signed: true, bits: 32, frac: 4, prec: Prec::D, d: 0 }));
+        assert_eq!(
+            decode(0xEEBE, 0x0BCE),
+            Instr::Vfp(Vfp::CvtFixed { to_fixed: true, signed: true, bits: 32, frac: 4, prec: Prec::D, d: 0 })
+        );
         assert_eq!(decode(0xEEF2, 0x0A10), Instr::Vfp(Vfp::Vmrs { rt: 0, reg: 2 }));
         assert_eq!(decode(0xEEEC, 0x0A10), Instr::Vfp(Vfp::Vmsr { rt: 0, reg: 12 }));
         assert_eq!(decode(0xEEFE, 0x0A10), Instr::Vfp(Vfp::Vmrs { rt: 0, reg: 14 }));
@@ -1977,5 +2145,22 @@ mod size_tests {
     #[test]
     fn instr_size() {
         assert!(std::mem::size_of::<super::Instr>() <= 24, "{}", std::mem::size_of::<super::Instr>());
+    }
+}
+
+#[cfg(test)]
+mod vins_tests {
+    use super::*;
+    #[test]
+    fn vins_vmovx_vadd_f16() {
+        println!("{:?}", decode(0xFEB0, 0x2AE0));
+        println!("{:?}", decode(0xFEF0, 0x2A42));
+        assert!(matches!(decode(0xEE72, 0x29A0), Instr::Vfp(Vfp::Arith { op: VArith::Add, prec: Prec::H, d: 5, n: 5, m: 1 })));
+        assert!(matches!(decode(0xFEF0, 0x2A42), Instr::Vfp(Vfp::Vmovx { d: 5, m: 4 })));
+        assert!(matches!(decode(0xFEB0, 0x2AE0), Instr::Vfp(Vfp::Vins { d: 4, m: 1 })));
+        // VSEL/VMAXNM with odd S registers (D = 1)
+        assert!(matches!(decode(0xFE70, 0x1A80), Instr::Vfp(Vfp::Vsel { .. })));
+        assert!(matches!(decode(0xFEC0, 0x1A80), Instr::Vfp(Vfp::MaxMinNm { .. })));
+        println!("{:?}", decode(0xEEB0, 0x2A40));
     }
 }

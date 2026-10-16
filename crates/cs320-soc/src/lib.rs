@@ -11,6 +11,7 @@ pub mod cam;
 pub mod dma;
 pub mod env;
 pub mod fpgaio;
+pub mod fvp;
 pub mod gpio;
 pub mod hdlcd;
 pub mod i2c;
@@ -76,7 +77,7 @@ pub mod irq {
     pub const VSI: [usize; 8] = [224, 225, 226, 227, 228, 229, 230, 231];
 }
 
-/// Parameters of the subsystem (the FVP's `-C` parameters that the model honours).
+/// Parameters of the subsystem: the single fixed Corstone-320 configuration (no `-C` parameters).
 #[derive(Clone, Debug)]
 pub struct Params {
     pub clocks: Clocks,
@@ -84,8 +85,11 @@ pub struct Params {
     pub initsvtor: u32,
     /// `mps4_board.QSPI_SRAM_SIZE` in MB.
     pub qspi_size_mb: u32,
-    /// `mps4_board.subsystem.ethosu.num_macs`.
+    /// Ethos-U85 MACs per cycle (`mps4_board.subsystem.ethosu.num_macs` on the FVP). The model
+    /// must be compiled for the same configuration (Vela `ethos-u85-256`).
     pub npu_macs: u32,
+    /// `mps4_board.subsystem.cpu0.CFGPACBTI`: PACBTI extension implemented (the FVP default is 0).
+    pub pacbti: bool,
     /// `mps4_board.pl370_hdlcd.force_frame_rate` (0 = from the timing registers).
     pub hdlcd_frame_rate: u32,
     /// `mps4_board.rtc.RTCDR_use_current_time` / `RTCDR_reset_value`.
@@ -100,8 +104,9 @@ impl Default for Params {
         Params {
             clocks: Clocks::default(),
             initsvtor: 0x1100_0000,
-            qspi_size_mb: 8,
-            npu_macs: 1024,
+            qspi_size_mb: 128,
+            npu_macs: 256,
+            pacbti: false,
             hdlcd_frame_rate: 50,
             rtc_current_time: true,
             rtc_reset_value: 0,
@@ -287,14 +292,17 @@ impl<B: BoardIo> System<B> {
             sched: Scheduler::new(slot::COUNT),
             warn: Warnings::default(),
             sysctrl: SysCtrl::new(params.initsvtor),
-            sysinfo: RegBlock::new("SYSINFO", sysctrl::SYSINFO_PIDR, sysctrl::SYSINFO_DEFAULTS),
-            sacfg: RegBlock::new("SACFG", sysctrl::SACFG_PIDR, sysctrl::SACFG_DEFAULTS),
-            nsacfg: RegBlock::new("NSACFG", sysctrl::NSACFG_PIDR, &[]),
-            mpc: std::array::from_fn(|_| RegBlock::new("MPC", sysctrl::MPC_PIDR, sysctrl::MPC_DEFAULTS)),
+            sysinfo: RegBlock::new("SYSINFO", sysctrl::SYSINFO_PIDR, sysctrl::SYSINFO_DEFAULTS).with_base(0x5802_0000),
+            sacfg: RegBlock::new("SACFG", sysctrl::SACFG_PIDR, sysctrl::SACFG_DEFAULTS).with_base(0x5008_0000),
+            nsacfg: RegBlock::new("NSACFG", sysctrl::NSACFG_PIDR, &[]).with_base(0x4008_0000),
+            mpc: std::array::from_fn(|i| {
+                let base = [0x5700_0000, 0x5700_1000, 0x5700_2000, 0x5008_3000, 0x5008_4000][i];
+                RegBlock::new("MPC", sysctrl::MPC_PIDR, sysctrl::MPC_DEFAULTS).with_base(base)
+            }),
             blocks: HashMap::new(),
             counter: SysCounter::new(c.counter_hz),
             timers: std::array::from_fn(SysTimer::new),
-            slowclk_timer: CmsdkTimer::new(c.slow_hz, slot::SLOWCLK_TIMER),
+            slowclk_timer: CmsdkTimer::new(c.slow_hz, slot::SLOWCLK_TIMER).slowclk(),
             wdog: std::array::from_fn(SysWdog::new),
             slowclk_wdog: CmsdkWdog::new(c.slow_hz, slot::SLOWCLK_WDOG),
             uart: std::array::from_fn(CmsdkUart::new),
@@ -396,7 +404,14 @@ impl<B: BoardIo> System<B> {
 
     /// Sets the time at which the board changes an input (buttons for the GPIO interrupts).
     pub fn inputs_changed(&mut self, now: Ticks) {
-        let mut env = Env { now, sched: &mut self.sched, mem: &mut self.mem, board: &mut self.board, warn: &mut self.warn, clocks: self.params.clocks };
+        let mut env = Env {
+            now,
+            sched: &mut self.sched,
+            mem: &mut self.mem,
+            board: &mut self.board,
+            warn: &mut self.warn,
+            clocks: self.params.clocks,
+        };
         for g in &mut self.gpio {
             g.poll(&mut env);
         }
@@ -407,7 +422,14 @@ impl<B: BoardIo> System<B> {
 
     /// Bytes from the host to UART `n`.
     pub fn uart_send(&mut self, now: Ticks, n: usize, data: &[u8]) {
-        let mut env = Env { now, sched: &mut self.sched, mem: &mut self.mem, board: &mut self.board, warn: &mut self.warn, clocks: self.params.clocks };
+        let mut env = Env {
+            now,
+            sched: &mut self.sched,
+            mem: &mut self.mem,
+            board: &mut self.board,
+            warn: &mut self.warn,
+            clocks: self.params.clocks,
+        };
         self.uart[n].host_send(&mut env, data);
         self.update_deadline();
     }
@@ -460,6 +482,8 @@ impl<B: BoardIo> System<B> {
             self.rtc.event(&mut env);
         } else if (23..31).contains(&i) {
             self.vsi[i - 23].event(&mut env);
+        } else if sl == slot::NPU {
+            self.npu.event(&mut env);
         } else if sl == slot::CAM {
             self.cam.event(&mut env);
         }
@@ -506,8 +530,8 @@ impl<B: BoardIo> System<B> {
         self.deadline_now = now;
         let mut lines = [0u64; 8];
         const ALL: &[usize] = &[
-            1, 2, 3, 4, 5, 16, 24, 25, 27, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 50, 57, 58, 69, 70, 71, 72, 125, 126, 127, 128, 132, 133, 224, 225, 226, 227, 228, 229,
-            230, 231,
+            1, 2, 3, 4, 5, 16, 24, 25, 27, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 50, 57, 58, 69, 70, 71, 72, 125,
+            126, 127, 128, 132, 133, 224, 225, 226, 227, 228, 229, 230, 231,
         ];
         for &i in ALL {
             if self.irq_line(i) {
@@ -528,6 +552,12 @@ impl<B: BoardIo> System<B> {
 
     fn periph_read_inner(&mut self, now: Ticks, addr: u32, size: u8, debug: bool) -> Result<u32, BusError> {
         let (p, off) = periph_of(addr).ok_or(BusError)?;
+        if off >= 0xFB8 && !matches!(p, Periph::Cam | Periph::Vsi(_) | Periph::Rtc) {
+            // identification registers as the FVP reports them
+            if let Some(v) = fvp::word(addr) {
+                return Ok(crate::env::narrow(v, addr, size));
+            }
+        }
         let clocks = self.params.clocks;
         let mut env = Env { now, sched: &mut self.sched, mem: &mut self.mem, board: &mut self.board, warn: &mut self.warn, clocks };
         let v = match p {
@@ -542,14 +572,14 @@ impl<B: BoardIo> System<B> {
                 }
             }
             Periph::CpuSecCtrl => self.block(0x5001_1000, "CPU0 SECCTRL").read(off, size),
-            Periph::Nsacfg => self.nsacfg.read(off, size),
-            Periph::Sacfg => self.sacfg.read(off, size),
-            Periph::Mpc(i) => self.mpc[i.min(4)].read(off, size),
-            Periph::Block(base) => self.block(base, block_name(base)).read(off, size),
+            Periph::Nsacfg => self.nsacfg.read_fvp(off, size),
+            Periph::Sacfg => self.sacfg.read_fvp(off, size),
+            Periph::Mpc(i) => self.mpc[i.min(4)].read_fvp(off, size),
+            Periph::Block(base) => self.block(base, block_name(base)).read_at(base, off, size),
             Periph::Gpio(i) => self.gpio[i].read(&mut env, off, size),
             Periph::Hdlcd => self.hdlcd.read(off, size),
             Periph::SysTimer(i) => self.timers[i].read(&mut env, off, size, &self.counter),
-            Periph::SysInfo => self.sysinfo.read(off, size),
+            Periph::SysInfo => self.sysinfo.read_fvp(off, size),
             Periph::SysCtrl => self.sysctrl.read(off, size),
             Periph::SlowClkWdog => self.slowclk_wdog.read(&mut env, off, size),
             Periph::SlowClkTimer => self.slowclk_timer.read(&mut env, off, size),
@@ -658,13 +688,16 @@ impl<B: BoardIo> System<B> {
     }
 
     fn block(&mut self, base: u32, name: &'static str) -> &mut RegBlock {
-        self.blocks.entry(base).or_insert_with(|| RegBlock::new(name, sysctrl::GENERIC_PIDR, &[]))
+        self.blocks.entry(base).or_insert_with(|| RegBlock::new(name, sysctrl::GENERIC_PIDR, &[]).with_base(base))
     }
 
     fn report(&mut self, addr: u32, name: &str) {
         let key = addr & 0xFFFF_F000 & !0x1000_0000;
         if self.reported.insert(key) {
-            self.warn.warn(self.deadline_now, format!("{name} at {:#010x} is not modelled: registers are stored, reads return the stored value", addr & 0xFFFF_F000));
+            self.warn.warn(
+                self.deadline_now,
+                format!("{name} at {:#010x} is not modelled: registers are stored, reads return the stored value", addr & 0xFFFF_F000),
+            );
         }
     }
 }

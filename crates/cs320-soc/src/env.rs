@@ -60,7 +60,8 @@ pub struct Clocks {
 
 impl Default for Clocks {
     fn default() -> Self {
-        Clocks { cpu_hz: 25_000_000, periph_hz: 25_000_000, counter_hz: 25_000_000, slow_hz: 32_768, audio_mclk_hz: 12_288_000 }
+        // measured on FVP_Corstone_SSE-320: CNTFID0 = 100 MHz, the slow clock is 32 kHz (not 32.768)
+        Clocks { cpu_hz: 25_000_000, periph_hz: 25_000_000, counter_hz: 100_000_000, slow_hz: 32_000, audio_mclk_hz: 12_288_000 }
     }
 }
 

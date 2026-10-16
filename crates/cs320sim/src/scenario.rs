@@ -167,7 +167,12 @@ pub fn schedule(sim: &Simulator, steps: Vec<Step>) -> Arc<Mutex<Results>> {
                             let ok = e.width.is_none_or(|x| x == w)
                                 && e.height.is_none_or(|x| x == h)
                                 && e.crc32.as_ref().is_none_or(|c| u32::from_str_radix(c.trim_start_matches("0x"), 16).ok() == Some(crc));
-                            check(&r, t, ok, format!("display {:?}x{:?} crc {:?} (got {w}x{h} crc32 {crc:08x})", e.width, e.height, e.crc32));
+                            check(
+                                &r,
+                                t,
+                                ok,
+                                format!("display {:?}x{:?} crc {:?} (got {w}x{h} crc32 {crc:08x})", e.width, e.height, e.crc32),
+                            );
                         }
                         None => check(&r, t, false, "display frame (none yet)".into()),
                     }

@@ -38,7 +38,7 @@ impl PixelFormat {
 
     /// Size of a frame in bytes.
     pub fn frame_bytes(self, w: u32, h: u32) -> usize {
-        ((w as usize * h as usize * self.bits() as usize) + 7) / 8
+        (w as usize * h as usize * self.bits() as usize).div_ceil(8)
     }
 }
 

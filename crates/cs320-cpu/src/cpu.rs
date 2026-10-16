@@ -8,12 +8,12 @@ use cs320_core::time::{ceil_cpu_cycle, TICKS_PER_CPU_CYCLE};
 use cs320_core::Ticks;
 
 /// Number of external interrupts of the SSE-320.
-pub const NUM_IRQ: usize = 480;
+pub const NUM_IRQ: usize = 256;
 /// Number of exceptions (16 system exceptions + IRQs).
 pub const NUM_EXC: usize = 16 + NUM_IRQ;
 /// Exception slots: 0..NUM_EXC are the exception numbers (the Secure instance of a banked
 /// system exception); `NS_SLOT_BASE + n` is the Non-secure instance of banked exception `n`.
-pub const NS_SLOT_BASE: usize = 496;
+pub const NS_SLOT_BASE: usize = NUM_EXC;
 pub const NUM_SLOTS: usize = 512;
 
 pub const EXC_RESET: usize = 1;
@@ -324,6 +324,8 @@ pub struct Cpu {
     pub(crate) stkof: bool,
     /// PAC keys (PAC_KEY_P/U, the Secure and Non-secure sets share storage per index).
     pub pac_key: [u32; 4],
+    /// PACBTI extension implemented (`CFGPACBTI`): PACG/AUTG/BXAUT are UNDEFINED without it.
+    pub pacbti: bool,
     pub(crate) reset_request: Option<ResetRequest>,
     /// Accumulated wait cycles from the bus for the current instruction.
     pub(crate) extra_cycles: u32,
@@ -338,6 +340,8 @@ pub struct Cpu {
     nsc_fetch: bool,
     /// Number of instructions still to log at trace level (`CS320_TRACE=insn`).
     pub trace_insn: u64,
+    /// The instruction just executed was VPT/VPST (no VPT advance after it).
+    pub(crate) vpt_set: bool,
 }
 
 impl Default for Cpu {
@@ -372,7 +376,7 @@ impl Cpu {
             fpca: false,
             sfpa: false,
             s: [0; 32],
-            fpscr: 0,
+            fpscr: crate::fpu::FPSCR_RESET,
             vpr: 0,
             lo_branch_valid: false,
             now: 0,
@@ -392,7 +396,7 @@ impl Cpu {
             pris: false,
             sysresetreqs: false,
             scr: [0; 2],
-            ccr: [0x200; 2],
+            ccr: [0x201; 2],
             shcsr_ena: [0; 2],
             mmfsr: [0; 2],
             ufsr: [0; 2],
@@ -409,13 +413,13 @@ impl Cpu {
             cpacr: [0; 2],
             nsacr: 0,
             csselr: 0,
-            fpccr: [0xC000_0000, 0xC000_0000],
+            fpccr: [0xC000_0004, 0xC000_0000],
             fpcar: [0; 2],
-            fpdscr: [0; 2],
+            fpdscr: [crate::fpu::FPSCR_RESET; 2],
             cpdlpstate: 0,
             dpdlpstate: 0,
-            mscr: 0,
-            pfcr: 0,
+            mscr: 0x3000,
+            pfcr: 1,
             systick: [SysTick::default(), SysTick::default()],
             mpu: [Mpu::default(), Mpu::default()],
             sau: Sau::default(),
@@ -452,6 +456,7 @@ impl Cpu {
             fnc_return: None,
             stkof: false,
             pac_key: [0; 4],
+            pacbti: false,
             reset_request: None,
             extra_cycles: 0,
             exceptions_taken: 0,
@@ -460,6 +465,7 @@ impl Cpu {
             icache_pages: Vec::new(),
             nsc_fetch: false,
             trace_insn: if std::env::var("CS320_TRACE").is_ok_and(|v| v.contains("insn")) { 2_000_000 } else { 0 },
+            vpt_set: false,
         };
         c.power_on_reset_debug();
         c
@@ -512,7 +518,7 @@ impl Cpu {
         self.fpca = false;
         self.sfpa = false;
         self.s = [0; 32];
-        self.fpscr = 0;
+        self.fpscr = crate::fpu::FPSCR_RESET;
         self.vpr = 0;
         self.lo_branch_valid = false;
         self.active = [0; 8];
@@ -527,7 +533,7 @@ impl Cpu {
         self.pris = false;
         self.sysresetreqs = false;
         self.scr = [0; 2];
-        self.ccr = [0x200; 2];
+        self.ccr = [0x201; 2];
         self.shcsr_ena = [0; 2];
         self.mmfsr = [0; 2];
         self.ufsr = [0; 2];
@@ -543,13 +549,13 @@ impl Cpu {
         self.cpacr = [0; 2];
         self.nsacr = 0;
         self.csselr = 0;
-        self.fpccr = [0xC000_0000, 0xC000_0000];
+        self.fpccr = [0xC000_0004, 0xC000_0000];
         self.fpcar = [0; 2];
-        self.fpdscr = [0; 2];
+        self.fpdscr = [crate::fpu::FPSCR_RESET; 2];
         self.cpdlpstate = 0;
         self.dpdlpstate = 0;
-        self.mscr = 0;
-        self.pfcr = 0;
+        self.mscr = 0x3000;
+        self.pfcr = 1;
         self.systick = [SysTick::default(), SysTick::default()];
         self.mpu = [Mpu::default(), Mpu::default()];
         self.sau = Sau::default();
@@ -717,7 +723,10 @@ impl Cpu {
 
     pub fn control_of(&self, secure: bool) -> u32 {
         let i = !secure as usize;
-        (self.npriv[i] as u32) | ((self.spsel[i] as u32) << 1) | ((self.fpca as u32) << 2) | if secure { (self.sfpa as u32) << 3 } else { 0 }
+        (self.npriv[i] as u32)
+            | ((self.spsel[i] as u32) << 1)
+            | ((self.fpca as u32) << 2)
+            | if secure { (self.sfpa as u32) << 3 } else { 0 }
     }
 
     pub fn set_control(&mut self, v: u32) {
@@ -995,25 +1004,25 @@ impl Cpu {
     /// The pending exceptions that may be taken, before priority comparison.
     fn pending_candidates(&self) -> ExcSet {
         let mut p = self.pending;
+        let mut sys = ExcSet::default();
+        for n in 0..16 {
+            set_add(&mut sys, n);
+            set_add(&mut sys, NS_SLOT_BASE + n);
+        }
         for i in 0..8 {
             // slots 0..15 and the NS system slots are always candidates; IRQs need enable
-            let mask = match i {
-                0 => 0xFFFF | (self.irq_enabled[0] << 16),
-                7 => (self.irq_enabled[7] << 16) | ((self.irq_enabled[6] >> 48) & 0xFFFF) | (0xFFFFu64 << 48),
-                _ => (self.irq_enabled[i] << 16) | (self.irq_enabled[i - 1] >> 48),
-            };
-            p[i] &= mask;
+            // (IRQ n sits in slot 16 + n)
+            let irq = (self.irq_enabled[i] << 16) | if i > 0 { self.irq_enabled[i - 1] >> 48 } else { 0 };
+            p[i] &= sys[i] | irq;
         }
         if self.c_maskints && self.c_debugen {
             // PendSV, SysTick and the interrupts are masked while stepping
             for slot in [EXC_PENDSV, EXC_SYSTICK, NS_SLOT_BASE + EXC_PENDSV, NS_SLOT_BASE + EXC_SYSTICK] {
-                set_remove(&mut p, slot);
+                set_remove(&mut sys, slot);
             }
-            p[0] &= 0xFFFF;
-            for w in p.iter_mut().take(7).skip(1) {
-                *w = 0;
+            for i in 0..8 {
+                p[i] &= sys[i];
             }
-            p[7] &= 0xFFFFu64 << 48;
         }
         p
     }
@@ -1096,12 +1105,12 @@ impl Cpu {
     /// New interrupt line levels from the device.
     pub fn set_irq_lines(&mut self, lines: IrqLines) {
         let mut changed = false;
-        for w in 0..8 {
-            let rising = lines[w] & !self.irq_lines[w];
-            self.irq_lines[w] = lines[w];
+        for (w, &line) in lines.iter().enumerate() {
+            let rising = line & !self.irq_lines[w];
+            self.irq_lines[w] = line;
             // a high line makes the interrupt pending unless it is active
             let active_w = (self.active[w] >> 16) | if w < 7 { self.active[w + 1] << 48 } else { 0 };
-            let p = (lines[w] & !active_w) | rising;
+            let p = (line & !active_w) | rising;
             if p != 0 {
                 changed = true;
                 let mut bits = p;
@@ -1192,7 +1201,7 @@ impl Cpu {
                 self.set_pending(slot);
                 return self.take_exception_frameless(bus, EXC_HARDFAULT);
             } else {
-                return self.enter_lockup();
+                return self.enter_lockup("stack overflow on exception entry");
             }
         }
         let xpsr = (self.xpsr() & !(1 << 9)) | ((align_bit as u32) << 9);
@@ -1276,7 +1285,7 @@ impl Cpu {
             self.ge = 0;
             if fp_frame {
                 self.s = [0; 32];
-                self.fpscr = 0;
+                self.fpscr = crate::fpu::FPSCR_RESET;
                 self.vpr = 0;
             }
         }
@@ -1336,6 +1345,9 @@ impl Cpu {
         if self.demcr & (1 << 16) != 0 && ep > self.effective_priority(EXC_DEBUGMON) {
             v |= 1 << 8;
         }
+        if self.fault_enabled(EXC_USAGEFAULT, self.secure) && ep > self.effective_priority(Self::sys_slot(EXC_USAGEFAULT, self.secure)) {
+            v |= 1 << 10; // UFRDY
+        }
         if callee_fp {
             v |= 1 << 26; // TS
         }
@@ -1353,7 +1365,7 @@ impl Cpu {
                 // vector table read error: HardFault
                 self.hfsr |= HFSR_VECTTBL;
                 if n == EXC_HARDFAULT || self.execution_priority() <= -1 {
-                    self.enter_lockup();
+                    self.enter_lockup("vector table read error");
                     return;
                 }
                 return self.exception_taken(bus, EXC_HARDFAULT);
@@ -1367,12 +1379,20 @@ impl Cpu {
             }
             self.hfsr |= HFSR_FORCED;
             if n == EXC_HARDFAULT {
-                return self.enter_lockup();
+                return self.enter_lockup("Secure vector without bit 0 (INVEP)");
             }
             return self.exception_taken(bus, EXC_HARDFAULT);
         }
         if log::log_enabled!(log::Level::Trace) {
-            log::trace!("exception {n} taken at {:#010x} -> {:#010x} (slot {slot})", self.pc, vector & !1);
+            log::trace!(
+                "exception {n} taken at {:#010x} -> {:#010x} (slot {slot}) ufsr {:#06x} mmfsr {:#04x} bfsr {:#04x} hfsr {:#010x}",
+                self.pc,
+                vector & !1,
+                self.ufsr[self.st()],
+                self.mmfsr[self.st()],
+                self.bfsr,
+                self.hfsr
+            );
         }
         self.pc = vector & !1;
         self.t = vector & 1 == 1;
@@ -1421,12 +1441,12 @@ impl Cpu {
             self.hfsr |= HFSR_FORCED;
             self.set_pending(EXC_HARDFAULT);
         } else {
-            self.enter_lockup();
+            self.enter_lockup("fault at priority -1 or lower");
         }
     }
 
-    fn enter_lockup(&mut self) {
-        log::warn!("core lockup at pc {:#010x}", self.pc);
+    fn enter_lockup(&mut self, why: &str) {
+        log::warn!("core lockup at pc {:#010x}: {why}", self.pc);
         self.lockup = true;
         self.pc = 0xEFFF_FFFE;
         self.reset_request = Some(ResetRequest::Lockup);
@@ -1486,7 +1506,7 @@ impl Cpu {
             EXC_HARDFAULT
         };
         if target == EXC_HARDFAULT && ep <= -1 {
-            self.enter_lockup();
+            self.enter_lockup("fault escalation at priority -1 or lower");
             return;
         }
         self.take_exception(bus, target, ret);
@@ -1602,7 +1622,7 @@ impl Cpu {
             for i in 0..16 {
                 self.s[i] = 0;
             }
-            self.fpscr = 0;
+            self.fpscr = crate::fpu::FPSCR_RESET;
             self.vpr = 0;
         }
         self.set_stack_state(if to_thread { 0 } else { new_ipsr }, frame_secure, if to_thread { use_psp } else { self.spsel[fst] });
@@ -1762,7 +1782,16 @@ impl Cpu {
         let pc = self.pc;
         if self.trace_insn > 0 {
             self.trace_insn -= 1;
-            log::trace!("[{}] pc {:#010x} sp {:#010x} r0 {:#010x} r1 {:#010x} lr {:#010x} {}", self.instret, pc, self.r[13], self.r[0], self.r[1], self.r[14], if self.secure { "S" } else { "NS" });
+            log::trace!(
+                "[{}] pc {:#010x} sp {:#010x} r0 {:#010x} r1 {:#010x} lr {:#010x} {}",
+                self.instret,
+                pc,
+                self.r[13],
+                self.r[0],
+                self.r[1],
+                self.r[14],
+                if self.secure { "S" } else { "NS" }
+            );
         }
         if !self.t {
             self.raise_fault(bus, Trap::Usage(CFSR_INVSTATE), pc);
@@ -1834,7 +1863,11 @@ impl Cpu {
         if !is_it {
             self.it_advance();
         }
-        self.vpt_advance();
+        if std::mem::take(&mut self.vpt_set) {
+            // VPT/VPST set the mask for the following instruction
+        } else {
+            self.vpt_advance();
+        }
         self.pc = self.next_pc;
         self.instret += 1;
         self.finish_cycles(cycles);
@@ -1930,33 +1963,32 @@ impl Cpu {
         }
     }
 
-    /// `VPTAdvance()`: shifts the MVE predication masks after every instruction.
+    /// `VPTAdvance()`: shifts the MVE predication masks after every instruction of a VPT
+    /// block. The mask bits are relative: a 1 in the top bit means the next instruction has the
+    /// opposite condition, so P0 is inverted for the beats the mask covers.
     #[inline]
     fn vpt_advance(&mut self) {
-        let mask01 = (self.vpr >> 16) & 0xFF;
-        let mask23 = (self.vpr >> 24) & 0xFF;
+        let mask01 = (self.vpr >> 16) & 0xF;
+        let mask23 = (self.vpr >> 20) & 0xF;
         if mask01 == 0 && mask23 == 0 {
             return;
         }
-        let adv = |m: u32| -> u32 {
-            if m & 0x7 == 0 {
-                0
-            } else {
-                (m & 0x8) | ((m << 1) & 0x7)
-            }
-        };
-        // invert the P0 bits of the lanes that the next instruction predicates on
-        let flip = |m: u32| -> bool { m & 0x8 != 0 && m & 0x7 != 0 && (m & 0x4 == 0) };
         let mut p0 = self.vpr & 0xFFFF;
-        let m01 = adv(mask01);
-        let m23 = adv(mask23);
-        if flip(mask01) {
-            p0 ^= 0x00FF;
-        }
-        if flip(mask23) {
-            p0 ^= 0xFF00;
-        }
-        self.vpr = (m23 << 24) | (m01 << 16) | p0;
+        let adv = |m: u32, p0: &mut u32, lanes: u32| -> u32 {
+            if m == 0 {
+                return 0;
+            }
+            if m & 7 == 0 {
+                return 0;
+            }
+            if m & 8 != 0 {
+                *p0 ^= lanes;
+            }
+            (m << 1) & 0xF
+        };
+        let m01 = adv(mask01, &mut p0, 0x00FF);
+        let m23 = adv(mask23, &mut p0, 0xFF00);
+        self.vpr = (self.vpr & 0xFF00_0000) | (m23 << 20) | (m01 << 16) | p0;
     }
 
     /// Execute-never and security check of an instruction fetch; returns the fetch attribute.

@@ -34,7 +34,6 @@ const R_FILENAME_VALID: usize = 5;
 const R_FRAME_WIDTH: usize = 6;
 const R_FRAME_HEIGHT: usize = 7;
 const R_COLOR_FORMAT: usize = 8;
-const R_FRAME_RATE: usize = 9;
 const R_FRAME_INDEX: usize = 10;
 const R_FRAME_COUNT: usize = 11;
 const R_FRAME_COUNT_MAX: usize = 12;
@@ -167,7 +166,7 @@ impl Vsi {
                     let channels = self.regs[1].clamp(1, 32);
                     let bits = self.regs[2].clamp(8, 32);
                     let rate = self.regs[3].max(1);
-                    let bytes = ((bits + 7) / 8) as usize;
+                    let bytes = bits.div_ceil(8) as usize;
                     let samples = size / bytes;
                     self.sample_buf.resize(samples, 0);
                     env.board.mic_samples(env.now, rate, channels, &mut self.sample_buf);
@@ -205,7 +204,7 @@ impl Vsi {
                     let channels = self.regs[1].clamp(1, 32);
                     let bits = self.regs[2].clamp(8, 32);
                     let rate = self.regs[3].max(1);
-                    let bytes = ((bits + 7) / 8) as usize;
+                    let bytes = bits.div_ceil(8) as usize;
                     let samples = size / bytes;
                     self.sample_buf.clear();
                     for i in 0..samples {
@@ -301,7 +300,13 @@ impl Vsi {
                         self.filename.push(nv as u8);
                         if self.filename.len() == self.regs[R_FILENAME_LEN] as usize {
                             let name = String::from_utf8_lossy(&self.filename).to_string();
-                            env.warn.warn(env.now, format!("VSI{}: video file {name:?} requested; the simulator's camera/display sources are used instead", self.n));
+                            env.warn.warn(
+                                env.now,
+                                format!(
+                                    "VSI{}: video file {name:?} requested; the simulator's camera/display sources are used instead",
+                                    self.n
+                                ),
+                            );
                         }
                     }
                     (Role::VideoIn(_) | Role::VideoOut(_), R_CONTROL) => {
@@ -408,9 +413,9 @@ pub fn from_rgba(rgba: &[u8], w: u32, h: u32, fmt: PixelFormat, out: &mut [u8]) 
     let px = |i: usize| (rgba[4 * i], rgba[4 * i + 1], rgba[4 * i + 2]);
     match fmt {
         PixelFormat::Gray8 => {
-            for i in 0..w_ * h_ {
+            for (i, o) in out.iter_mut().enumerate().take(w_ * h_) {
                 let (r, g, b) = px(i);
-                out[i] = ((r as u32 * 77 + g as u32 * 150 + b as u32 * 29) >> 8) as u8;
+                *o = ((r as u32 * 77 + g as u32 * 150 + b as u32 * 29) >> 8) as u8;
             }
         }
         PixelFormat::Rgb888 => {

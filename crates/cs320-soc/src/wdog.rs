@@ -130,7 +130,17 @@ pub struct CmsdkWdog {
 
 impl CmsdkWdog {
     pub fn new(hz: u64, slot: Slot) -> Self {
-        CmsdkWdog { load: 0xFFFF_FFFF, control: 0, raw_int: false, lock: 0, reset_request: false, base_value: 0xFFFF_FFFF, origin: 0, period: FracPeriod::from_hz(hz), slot }
+        CmsdkWdog {
+            load: 0xFFFF_FFFF,
+            control: 0,
+            raw_int: false,
+            lock: 0,
+            reset_request: false,
+            base_value: 0xFFFF_FFFF,
+            origin: 0,
+            period: FracPeriod::from_hz(hz),
+            slot,
+        }
     }
 
     pub fn reset(&mut self, now: Ticks) {

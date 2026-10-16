@@ -1,8 +1,9 @@
 //! Drives the GDB server like GDB and the cdt-gdb-adapter (controller + auxiliary connection).
 
-use cs320_loader::Image;
 use cs320_board::runtime::{Options, Simulator, Speed};
 use cs320_board::Machine;
+use cs320_loader::Image;
+use cs320_soc::Params;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
@@ -75,11 +76,11 @@ fn hex(s: &str) -> String {
 
 #[test]
 fn controller_and_auxiliary() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/elf/BoardTest.elf");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/elf/Blinky.elf");
     let img = Image::load(&path).unwrap();
     let main = img.symbol("main").unwrap() & !1;
     let reset = img.symbol("Reset_Handler").unwrap();
-    let mut m = Machine::new();
+    let mut m = Machine::new(Params::default());
     m.load_image(&img).unwrap();
     m.power_on();
     let sim = Simulator::start(m, Options { speed: Speed::Max, start_halted: true, ..Default::default() });
@@ -95,13 +96,17 @@ fn controller_and_auxiliary() {
     let xml = c.cmd("qXfer:features:read:target.xml:0,ffb");
     assert!(xml.starts_with('l') && xml.contains("org.gnu.gdb.arm.m-profile") && xml.contains("org.gnu.gdb.arm.vfp"));
     let mm = c.cmd("qXfer:memory-map:read::0,ffb");
-    assert!(mm.contains("type=\"flash\" start=\"0x0\""));
+    assert!(mm.contains("type=\"ram\" start=\"0x11000000\""), "the boot ROM is loadable RAM: {mm}");
     assert!(c.cmd("?").starts_with("T05"));
     let g = c.cmd("g");
-    assert_eq!(g.len(), (24 * 4 + 16 * 8) * 2, "r0-pc, xpsr, 6 system registers, fpscr; d0-d15");
+    assert_eq!(
+        g.len(),
+        (24 * 4 + 16 * 8 + 9 * 4) * 2,
+        "r0-pc, xpsr, 6 system registers, fpscr; d0-d15; 8 Security Extension registers, vpr"
+    );
     assert_eq!(reg(&g, 15), reset & !1, "halted at the reset vector");
-    // vector table
-    let vt = c.cmd("m0,8");
+    // vector table in the boot ROM
+    let vt = c.cmd("m11000000,8");
     assert_eq!(vt.len(), 16);
     // hardware breakpoint at main, continue
     assert_eq!(c.cmd(&format!("Z1,{main:x},2")), "OK");

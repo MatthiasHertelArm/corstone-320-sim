@@ -47,6 +47,9 @@ impl CmsdkGpio {
     pub fn detect(&mut self, v: u16) {
         for bit in 0..16u16 {
             let m = 1 << bit;
+            if self.inten & m == 0 {
+                continue;
+            }
             let level = v & m != 0;
             let pol = self.intpol & m != 0;
             if self.inttype & m != 0 {

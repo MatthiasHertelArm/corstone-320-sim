@@ -27,7 +27,10 @@ pub const FPSCR_DZC: u32 = 1 << 1;
 pub const FPSCR_IOC: u32 = 1 << 0;
 /// Writable bits of FPSCR on the Cortex-M85 (NZCV, QC, AHP, DN, FZ, RMode, FZ16, LTPSIZE,
 /// the cumulative flags).
-pub const FPSCR_MASK: u32 = 0xFFC8_009F;
+/// Writable FPSCR bits: flags, AHP/DN/FZ/RMode, FZ16, LTPSIZE (Armv8.1-M), cumulative exceptions.
+pub const FPSCR_MASK: u32 = 0xFFCF_009F;
+/// Reset value: LTPSIZE = 0b100 (no tail-predicated loop active).
+pub const FPSCR_RESET: u32 = 0x0004_0000;
 
 pub const DEFAULT_NAN32: u32 = 0x7FC0_0000;
 pub const DEFAULT_NAN64: u64 = 0x7FF8_0000_0000_0000;
@@ -130,7 +133,7 @@ fn zero(neg: bool, p: Prec) -> u64 {
 
 fn inf(neg: bool, p: Prec) -> u64 {
     let f = format(p);
-    zero(neg, p) | ((((1u64 << f.exp_bits) - 1) as u64) << f.frac_bits)
+    zero(neg, p) | (((1u64 << f.exp_bits) - 1) << f.frac_bits)
 }
 
 fn fz_applies(p: Prec, fpscr: u32) -> bool {
@@ -149,13 +152,18 @@ fn unpack(x: u64, p: Prec, fpscr: &mut u32) -> Unpacked {
     let max_exp = (1 << f.exp_bits) - 1;
     if exp == 0 {
         if frac == 0 || fz_applies(p, *fpscr) {
-            if frac != 0 {
+            // flushing a half-precision denormal under FZ16 does not signal Input Denormal
+            if frac != 0 && p != Prec::H {
                 *fpscr |= FPSCR_IDC;
             }
             return Unpacked { kind: Kind::Zero, neg, value: if neg { -0.0 } else { 0.0 } };
         }
-        let bias = (1 << (f.exp_bits - 1)) - 1;
-        let v = frac as f64 * 2f64.powi(1 - bias - f.frac_bits);
+        // `powi` of the minimum double exponent underflows: take the host's own value
+        let v = match p {
+            Prec::D => f64::from_bits(frac),
+            Prec::S => f32::from_bits(frac as u32) as f64,
+            Prec::H => frac as f64 * 2f64.powi(-24),
+        };
         return Unpacked { kind: Kind::Normal, neg, value: if neg { -v } else { v } };
     }
     if exp == max_exp {
@@ -170,7 +178,12 @@ fn unpack(x: u64, p: Prec, fpscr: &mut u32) -> Unpacked {
         Prec::S => f32::from_bits(x as u32) as f64,
         Prec::H => {
             let bias = 15;
-            (1024 + frac) as f64 * 2f64.powi(exp - bias - 10)
+            let v = (1024 + frac) as f64 * 2f64.powi(exp - bias - 10);
+            if neg {
+                -v
+            } else {
+                v
+            }
         }
     };
     Unpacked { kind: Kind::Normal, neg, value: v }
@@ -223,27 +236,45 @@ fn invalid(p: Prec, fpscr: &mut u32) -> u64 {
 /// `FPRound` of the exact value `v + residual * tiny` (residual: sign of the exact error
 /// relative to `v`, i.e. -1, 0 or +1) to a half or single format; `v` must be finite and
 /// nonzero. With `ahp`, the half-precision alternative format has no infinities.
-fn round_fmt(v: f64, residual: i32, fmt: Format, fpscr: &mut u32, ahp: bool, fz: bool) -> u32 {
-    let neg = v < 0.0;
-    let bits = v.abs().to_bits();
+/// Mantissa and exponent of a finite nonzero double: |x| = m × 2^e exactly.
+fn mant_exp(x: f64) -> (u128, i32) {
+    let bits = x.abs().to_bits();
     let exp_field = (bits >> 52) as i32;
-    let (m, e) = if exp_field == 0 { (bits & ((1 << 52) - 1), -1074) } else { ((bits & ((1 << 52) - 1)) | (1 << 52), exp_field - 1075) };
+    let frac = bits & ((1 << 52) - 1);
+    if exp_field == 0 {
+        (frac as u128, -1074)
+    } else {
+        ((frac | (1 << 52)) as u128, exp_field - 1075)
+    }
+}
+
+fn round_fmt(v: f64, residual: i32, fmt: Format, fpscr: &mut u32, ahp: bool, fz: bool) -> u32 {
+    let (m, e) = mant_exp(v);
+    round_mant(v < 0.0, m, e, residual, fmt, fpscr, ahp, fz) as u32
+}
+
+/// Rounds the exact value ±(m × 2^e), nudged by a residual of the given sign that is smaller
+/// than one unit of `m` (in the signed-value sense), to the format with the FPSCR rounding mode,
+/// setting the flags. `m` must be nonzero and below 2^122.
+#[allow(clippy::too_many_arguments)]
+fn round_mant(neg: bool, m: u128, e: i32, residual: i32, fmt: Format, fpscr: &mut u32, ahp: bool, fz: bool) -> u64 {
     let r = if neg { -residual } else { residual };
-    let m2: u128 = ((m as u128) << 2).wrapping_add(r as i128 as u128);
+    let m2: u128 = (m << 2).wrapping_add(r as i128 as u128);
     let e2 = e - 2;
     let msb = 127 - m2.leading_zeros() as i32;
     let big_e = msb + e2;
     let bias = (1 << (fmt.exp_bits - 1)) - 1;
     let emin = 1 - bias;
+    let sign_bit = (neg as u64) << (fmt.frac_bits + fmt.exp_bits);
     if fz && big_e < emin {
         *fpscr |= FPSCR_UFC;
-        return (neg as u32) << (fmt.frac_bits + fmt.exp_bits);
+        return sign_bit;
     }
     let lsb_exp = (big_e - fmt.frac_bits).max(emin - fmt.frac_bits);
     let sh = lsb_exp - e2;
     let (mut q, rem, half) = if sh <= 0 {
         (m2 << (-sh) as u32, 0u128, 1u128)
-    } else if sh >= 100 {
+    } else if sh >= 127 {
         (0, m2, u128::MAX)
     } else {
         (m2 >> sh, m2 & ((1u128 << sh) - 1), 1u128 << (sh - 1))
@@ -270,13 +301,12 @@ fn round_fmt(v: f64, residual: i32, fmt: Format, fpscr: &mut u32, ahp: bool, fz:
         *fpscr |= FPSCR_UFC;
     }
     let max_exp_field = (1 << fmt.exp_bits) - 1;
-    let (biased, frac) = if q >= normal_min { (lsb + fmt.frac_bits + bias, (q - normal_min) as u32) } else { (0, q as u32) };
-    let sign_bit = (neg as u32) << (fmt.frac_bits + fmt.exp_bits);
-    let max_normal = (((max_exp_field - 1) as u32) << fmt.frac_bits) | ((1 << fmt.frac_bits) - 1);
+    let (biased, frac) = if q >= normal_min { (lsb + fmt.frac_bits + bias, (q - normal_min) as u64) } else { (0, q as u64) };
+    let max_normal = (((max_exp_field - 1) as u64) << fmt.frac_bits) | ((1u64 << fmt.frac_bits) - 1);
     if ahp {
         if biased > max_exp_field {
             *fpscr |= FPSCR_IOC;
-            return sign_bit | ((max_exp_field as u32) << fmt.frac_bits) | ((1 << fmt.frac_bits) - 1);
+            return sign_bit | ((max_exp_field as u64) << fmt.frac_bits) | ((1u64 << fmt.frac_bits) - 1);
         }
     } else if biased >= max_exp_field {
         *fpscr |= FPSCR_OFC | FPSCR_IXC;
@@ -286,12 +316,94 @@ fn round_fmt(v: f64, residual: i32, fmt: Format, fpscr: &mut u32, ahp: bool, fz:
             Rounding::MinusInf => neg,
             Rounding::Zero => false,
         };
-        return sign_bit | if to_inf { (max_exp_field as u32) << fmt.frac_bits } else { max_normal };
+        return sign_bit | if to_inf { (max_exp_field as u64) << fmt.frac_bits } else { max_normal };
     }
     if inexact {
         *fpscr |= FPSCR_IXC;
     }
-    sign_bit | ((biased as u32) << fmt.frac_bits) | frac
+    sign_bit | ((biased as u64) << fmt.frac_bits) | frac
+}
+
+/// Rounds an exact double result ±(m × 2^e) with residual sign (see [`round_mant`]).
+fn round_d(neg: bool, m: u128, e: i32, residual: i32, fpscr: &mut u32) -> u64 {
+    if m == 0 && residual == 0 {
+        return zero(neg, Prec::D);
+    }
+    if m == 0 {
+        // only a residual: a value below one unit of the (zero) mantissa
+        *fpscr |= FPSCR_UFC | FPSCR_IXC;
+        return directed_tiny(residual < 0, fpscr);
+    }
+    round_mant(neg, m, e, residual, DOUBLE, fpscr, false, *fpscr & FPSCR_FZ != 0)
+}
+
+/// Exact sum of two nonzero values ±(mp × 2^ep) and ±(mc × 2^ec), rounded once to double.
+fn fma_exact(sp: bool, mp: u128, ep: i32, sc: bool, mc: u128, ec: i32, fpscr: &mut u32) -> u64 {
+    let len = |m: u128| 128 - m.leading_zeros() as i32;
+    // A: the operand whose most significant bit is higher; B: the other one
+    let (sa, ma, ea, sb, mb, eb) = if ep + len(mp) >= ec + len(mc) { (sp, mp, ep, sc, mc, ec) } else { (sc, mc, ec, sp, mp, ep) };
+    // common exponent: A's MSB at bit 118
+    let e = ea + len(ma) - 119;
+    let a2 = ma << (ea - e) as u32;
+    let shift = eb - e;
+    let (b2, lost) = if shift >= 0 {
+        if shift + len(mb) > 120 {
+            // cannot happen: B's MSB is at or below A's
+            (0u128, true)
+        } else {
+            (mb << shift as u32, false)
+        }
+    } else {
+        let sh = (-shift) as u32;
+        if sh >= 127 {
+            (0, true)
+        } else {
+            (mb >> sh, mb & ((1u128 << sh) - 1) != 0)
+        }
+    };
+    let va = if sa { -(a2 as i128) } else { a2 as i128 };
+    let vb = if sb { -(b2 as i128) } else { b2 as i128 };
+    let v = va + vb;
+    // the bits lost from B make the true value larger in the direction of B's sign
+    let residual = if lost {
+        if sb {
+            -1
+        } else {
+            1
+        }
+    } else {
+        0
+    };
+    if v == 0 && !lost {
+        return zero(rounding_mode(*fpscr) == Rounding::MinusInf, Prec::D);
+    }
+    if v == 0 {
+        return round_d(residual < 0, 0, e, residual, fpscr);
+    }
+    let neg = v < 0;
+    round_d(neg, v.unsigned_abs(), e, residual, fpscr)
+}
+
+/// Integer square root of a u128.
+fn isqrt(n: u128) -> u128 {
+    if n < 2 {
+        return n;
+    }
+    let mut x = 1u128 << ((128 - n.leading_zeros()).div_ceil(2));
+    loop {
+        let y = (x + n / x) / 2;
+        if y >= x {
+            break;
+        }
+        x = y;
+    }
+    while x * x > n {
+        x -= 1;
+    }
+    while (x + 1) * (x + 1) <= n {
+        x += 1;
+    }
+    x
 }
 
 /// Rounds the host's round-to-nearest double `s` with the sign of the exact residual to the
@@ -330,7 +442,7 @@ fn round_f64(s: f64, residual: i32, fpscr: &mut u32) -> u64 {
                 } else {
                     -f64::from_bits(1)
                 }
-            } else if up == !neg {
+            } else if up != neg {
                 f64::from_bits(bits + 1)
             } else {
                 f64::from_bits(bits - 1)
@@ -448,18 +560,13 @@ pub fn mul(a: u64, b: u64, p: Prec, fpscr: &mut u32) -> u64 {
         (Kind::Inf, _) | (_, Kind::Inf) => inf(sign, p),
         (Kind::Zero, _) | (_, Kind::Zero) => zero(sign, p),
         _ => {
-            let prod = ua.value * ub.value;
             if p == Prec::D {
-                if prod == 0.0 {
-                    // underflow below the smallest denormal: the exact product is nonzero
-                    *fpscr |= FPSCR_UFC | FPSCR_IXC;
-                    return directed_tiny(sign, fpscr);
-                }
-                let err = ua.value.mul_add(ub.value, -prod);
-                round_f64(prod, sign_of(err), fpscr)
-            } else {
-                round_to(prod, 0, p, fpscr)
+                let (ma, ea) = mant_exp(ua.value);
+                let (mb, eb) = mant_exp(ub.value);
+                return round_d(sign, ma * mb, ea + eb, 0, fpscr);
             }
+            let prod = ua.value * ub.value;
+            round_to(prod, 0, p, fpscr)
         }
     }
 }
@@ -493,11 +600,18 @@ pub fn div(a: u64, b: u64, p: Prec, fpscr: &mut u32) -> u64 {
         }
         (Kind::Zero, _) | (_, Kind::Inf) => zero(sign, p),
         _ => {
-            let q = ua.value / ub.value;
-            if p == Prec::D && q == 0.0 {
-                *fpscr |= FPSCR_UFC | FPSCR_IXC;
-                return directed_tiny(sign, fpscr);
+            if p == Prec::D {
+                let (ma, ea) = mant_exp(ua.value);
+                let (mb, eb) = mant_exp(ub.value);
+                // at least 71 quotient bits whatever the (possibly denormal) mantissas
+                let k = 124 - (128 - ma.leading_zeros() as i32);
+                let num = ma << k;
+                let q = num / mb;
+                let sticky = i32::from(!num.is_multiple_of(mb));
+                let residual = if sign { -sticky } else { sticky };
+                return round_d(sign, q, ea - eb - k, residual, fpscr);
             }
+            let q = ua.value / ub.value;
             let rem = (-q).mul_add(ub.value, ua.value);
             round_to(q, sign_of(rem) * sign_of(ub.value), p, fpscr)
         }
@@ -512,6 +626,18 @@ pub fn sqrt(a: u64, p: Prec, fpscr: &mut u32) -> u64 {
         Kind::Inf if !ua.neg => inf(false, p),
         _ if ua.neg => invalid(p, fpscr),
         _ => {
+            if p == Prec::D {
+                let (m, e) = mant_exp(ua.value);
+                // at least 57 root bits whatever the mantissa, with an even exponent
+                let mut k = 120 - (128 - m.leading_zeros() as i32);
+                if (e - k) & 1 != 0 {
+                    k -= 1;
+                }
+                let n = m << k;
+                let r = isqrt(n);
+                let sticky = if r * r != n { 1 } else { 0 };
+                return round_d(false, r, (e - k) / 2, sticky, fpscr);
+            }
             let r = ua.value.sqrt();
             let rem = (-r).mul_add(r, ua.value);
             round_to(r, sign_of(rem), p, fpscr)
@@ -546,28 +672,26 @@ pub fn mul_add(addend: u64, op1: u64, op2: u64, p: Prec, fpscr: &mut u32) -> u64
         return zero(ua.neg, p);
     }
     if p == Prec::D {
-        let r = u1.value.mul_add(u2.value, ua.value);
-        if r == 0.0 {
-            // exact zero only when the product cancels the addend exactly (or both are zero)
-            let prod = u1.value * u2.value;
-            let e1 = u1.value.mul_add(u2.value, -prod);
-            if prod == -ua.value && e1 == 0.0 {
-                return zero(rounding_mode(*fpscr) == Rounding::MinusInf, p);
-            }
-            if zero_prod && ua.kind == Kind::Zero {
-                return zero(ua.neg && sign_p, p);
-            }
-            *fpscr |= FPSCR_UFC | FPSCR_IXC;
-            let s = if ua.kind == Kind::Zero { sign_p } else { sign_of(prod + ua.value + e1) < 0 };
-            return directed_tiny(s, fpscr);
+        // exact: the product has up to 106 bits, the addend is aligned to it with a sticky bit
+        let (mp, ep) = if zero_prod {
+            (0u128, 0)
+        } else {
+            let (m1, e1) = mant_exp(u1.value);
+            let (m2, e2) = mant_exp(u2.value);
+            (m1 * m2, e1 + e2)
+        };
+        let (mc, ec) = if ua.kind == Kind::Zero { (0u128, 0) } else { mant_exp(ua.value) };
+        if mp == 0 && mc == 0 {
+            // zeros of different signs: +0, or -0 when rounding towards minus infinity
+            return zero(rounding_mode(*fpscr) == Rounding::MinusInf, p);
         }
-        // residual sign: exact = prod + e1 + addend; r = RN(exact)
-        let prod = u1.value * u2.value;
-        let e1 = u1.value.mul_add(u2.value, -prod);
-        let (s, e2) = two_sum(prod, ua.value);
-        let (t, e3) = two_sum(s, -r);
-        let resid = if t != 0.0 { t } else { e3 + e2 + e1 };
-        return round_f64(r, sign_of(resid), fpscr);
+        if mp == 0 {
+            return round_d(ua.neg, mc, ec, 0, fpscr);
+        }
+        if mc == 0 {
+            return round_d(sign_p, mp, ep, 0, fpscr);
+        }
+        return fma_exact(sign_p, mp, ep, ua.neg, mc, ec, fpscr);
     }
     let prod = u1.value * u2.value; // exact for half and single operands
     let (s, err) = two_sum(ua.value, prod);
@@ -728,11 +852,30 @@ pub fn max_min_nm(a: u64, b: u64, p: Prec, max: bool, fpscr: &mut u32) -> u64 {
             }
         }
     };
+    // a denormal operand flushed by FZ yields the zero it was flushed to
     if pick_a {
-        a2 & mask(p)
+        if ua2.kind == Kind::Zero {
+            zero(ua2.neg, p)
+        } else {
+            a2 & mask(p)
+        }
+    } else if ub2.kind == Kind::Zero {
+        zero(ub2.neg, p)
     } else {
         b2 & mask(p)
     }
+}
+
+/// Conversion from half precision with or without the FZ16 flush of a denormal input.
+pub fn convert_from_half(a: u64, to: Prec, flush: bool, fpscr: &mut u32) -> u64 {
+    if flush {
+        return convert(a, Prec::H, to, fpscr);
+    }
+    let saved = *fpscr & FPSCR_FZ16;
+    *fpscr &= !FPSCR_FZ16;
+    let r = convert(a, Prec::H, to, fpscr);
+    *fpscr |= saved;
+    r
 }
 
 /// Conversion between precisions (`FPConvert`): VCVTB/VCVTT, VCVT.F64.F32, VCVT.F32.F64.
@@ -744,7 +887,7 @@ pub fn convert(a: u64, from: Prec, to: Prec, fpscr: &mut u32) -> u64 {
     // the alternative half-precision format has no infinities or NaNs
     let ua = if ahp_from && ua.kind != Kind::Zero && ua.kind != Kind::Normal {
         let frac = a & ((1u64 << f_from.frac_bits) - 1);
-        let v = (1024 + frac) as f64 * 2f64.powi(16 - 15 - 10);
+        let v = (1024 + frac) as f64 * 2f64.powi(31 - 15 - 10);
         Unpacked { kind: Kind::Normal, neg: ua.neg, value: if ua.neg { -v } else { v } }
     } else {
         ua
@@ -764,7 +907,11 @@ pub fn convert(a: u64, from: Prec, to: Prec, fpscr: &mut u32) -> u64 {
             // keep the fraction bits that fit
             let frac = a & ((1u64 << f_from.frac_bits) - 1);
             let f_to = format(to);
-            let frac_to = if f_to.frac_bits >= f_from.frac_bits { frac << (f_to.frac_bits - f_from.frac_bits) } else { frac >> (f_from.frac_bits - f_to.frac_bits) };
+            let frac_to = if f_to.frac_bits >= f_from.frac_bits {
+                frac << (f_to.frac_bits - f_from.frac_bits)
+            } else {
+                frac >> (f_from.frac_bits - f_to.frac_bits)
+            };
             (inf(ua.neg, to) | frac_to | quiet_bit(to)) & mask(to)
         }
         Kind::Inf => {
@@ -872,5 +1019,41 @@ mod tests {
         assert_eq!(add(snan, f(1.0), Prec::S, &mut dn), DEFAULT_NAN32 as u64);
         let mut t = 0;
         assert_eq!(add(d(f64::INFINITY), d(f64::NEG_INFINITY), Prec::D, &mut t), DEFAULT_NAN64);
+    }
+}
+
+#[cfg(test)]
+mod denorm_tests {
+    use super::*;
+
+    #[test]
+    fn double_denormals_survive_without_fz() {
+        let mut f = FPSCR_RESET;
+        assert_eq!(add(0, 1, Prec::D, &mut f), 1, "0 + min denormal");
+        assert_eq!(f & 0x9F, 0, "no flags");
+        let mut f = FPSCR_RESET;
+        assert_eq!(compare(0, 1, Prec::D, false, &mut f) >> 28, 0b1000, "0 < denormal");
+        let mut f = FPSCR_RESET;
+        assert_eq!(unpack(0xAD55, Prec::H, &mut f).value, -(0x155 as f64 + 1024.0) * 2f64.powi(11 - 15 - 10));
+    }
+}
+
+#[cfg(test)]
+mod h_mve_tests {
+    use super::*;
+    #[test]
+    fn half_denormal_add_under_fz_dn() {
+        let mut f = 0x0304_0000; // DN | FZ | LTPSIZE
+        let r = add(0x807F, 0, Prec::H, &mut f);
+        assert_eq!(r, 0x807F, "fpscr {f:#x}");
+        let mut f = 0x0304_0000;
+        let r = add(0x0123, 0, Prec::H, &mut f);
+        assert_eq!(r, 0x0123, "fpscr {f:#x}");
+        let mut f = 0x0304_0000;
+        let r = add(0, 1, Prec::H, &mut f);
+        assert_eq!(r, 1, "0 + min denormal, fpscr {f:#x}");
+        let mut f = 0x0304_0000;
+        let r = add(0x3C00, 0x807F, Prec::H, &mut f);
+        assert_eq!(r, 0x3C00, "1 - denormal rounds to 1, fpscr {f:#x}");
     }
 }

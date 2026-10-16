@@ -1,15 +1,19 @@
-# SSE_320_BSP Blinky: banner on UART0, then the lit FPGA LED moves one position per second
-# (led_runner: the MPS4 has more than one user LED).
-- at: 0.5
+# SSE_320_BSP Blinky: banner on UART0, then the lit FPGA LED moves one position per "second"
+# (led_runner, bouncing between the ten MPS4 user LEDs). The BSP programs the system timer
+# for a 25 MHz clock while the Corstone-320 FVP (and this simulator) clock the system counter
+# at 100 MHz, so one LED step takes 0.25 s of simulated time.
+- at: 0.37
   expect-uart: "= Blinky is running ="
-- at: 0.6
-  expect-uart: "LED timer interval is set to 1s"
-- at: 0.9
-  expect-leds: "0000000000"
-- at: 1.5
   expect-leds: "0000000001"
-- at: 2.5
+- at: 0.62
+  expect-uart: "LED timer interval is set to 1s"
   expect-leds: "0000000010"
-- at: 3.5
+- at: 0.87
   expect-leds: "0000000100"
+- at: 1.12
+  expect-leds: "0000001000"
+- at: 2.62
+  expect-leds: "1000000000"
+- at: 2.87
+  expect-leds: "0100000000"
   exit: true

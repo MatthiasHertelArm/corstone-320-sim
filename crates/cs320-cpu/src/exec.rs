@@ -199,7 +199,7 @@ impl Cpu {
         if addr >> 20 == 0xE00 {
             return self.ppb_read(addr, size, true).ok();
         }
-        let ns = self.attribution(bus, addr).0 == false;
+        let ns = !self.attribution(bus, addr).0;
         bus.read(self.now, addr, size, ns, true).ok()
     }
 
@@ -211,7 +211,7 @@ impl Cpu {
             return ok;
         }
         self.invalidate_decode_page(addr);
-        let ns = self.attribution(bus, addr).0 == false;
+        let ns = !self.attribution(bus, addr).0;
         bus.write(self.now, addr, size, v, ns, true).is_ok()
     }
 
@@ -784,6 +784,18 @@ impl Cpu {
                 self.set_reg(rt, v);
                 Ok(2)
             }
+            Lda { size, rt, rn } => {
+                let a = self.reg(rn);
+                let v = self.mem_read(bus, a, size, true, false)?;
+                self.set_reg(rt, v);
+                Ok(2)
+            }
+            Stl { size, rt, rn } => {
+                let a = self.reg(rn);
+                let v = self.reg(rt);
+                self.mem_write(bus, a, size, v, true, false)?;
+                Ok(2)
+            }
             Strex { size, rd, rt, rn, imm } => {
                 let a = self.reg(rn).wrapping_add(imm);
                 if size > 1 && a & (size as u32 - 1) != 0 {
@@ -877,6 +889,23 @@ impl Cpu {
                 self.set_reg(rd, r);
                 Ok(1)
             }
+            LongShift { op, rda_lo, rda_hi, rm, imm, sat48 } => {
+                let shift = if rm == 15 { imm as i32 } else { self.reg(rm) as i8 as i32 };
+                let mut q = false;
+                if rda_hi == 15 {
+                    let r = scalar_shift32(op, self.reg(rda_lo), shift, &mut q);
+                    self.set_reg(rda_lo, r);
+                } else {
+                    let v = ((self.reg(rda_hi) as u64) << 32) | self.reg(rda_lo) as u64;
+                    let r = scalar_shift64(op, v, shift, sat48, &mut q);
+                    self.set_reg(rda_lo, r as u32);
+                    self.set_reg(rda_hi, (r >> 32) as u32);
+                }
+                if q {
+                    self.q = true;
+                }
+                Ok(1)
+            }
             Tt { rd, rn, alt, unpriv } => {
                 let addr = self.reg(rn);
                 let v = self.test_target(bus, addr, alt, unpriv);
@@ -926,7 +955,8 @@ impl Cpu {
                     self.mem_write(bus, sp, 4, ret, true, false)?;
                     self.mem_write(bus, sp + 4, 4, psr, true, false)?;
                     self.r[13] = sp;
-                    self.r[14] = FNC_RETURN & !1 | (self.spsel[S] as u32 & 0) | 1;
+                    // FNC_RETURN with bit 0 = 1 (the SFPA bit stays clear)
+                    self.r[14] = FNC_RETURN | 1;
                     self.t = true;
                     self.next_pc = target & !1;
                     self.switch_to_nonsecure();
@@ -952,6 +982,7 @@ impl Cpu {
                 }
                 Ok(1)
             }
+            Pacg { .. } | Autg { .. } | Bxaut { .. } if !self.pacbti => Err(Trap::Usage(CFSR_UNDEFINSTR)),
             Pacg { rd, rn, rm } => {
                 let v = self.pac(self.reg(rn), self.reg(rm));
                 self.set_reg(rd, v);
@@ -982,7 +1013,9 @@ impl Cpu {
                 if while_ && count == 0 {
                     self.next_pc = self.pc.wrapping_add(4).wrapping_add(imm);
                     if tp != 0 {
+                        // the FVP leaves LR = 1 behind a skipped tail-predicated loop
                         self.set_ltpsize(16);
+                        self.r[14] = 1;
                     }
                 }
                 Ok(1)
@@ -997,7 +1030,7 @@ impl Cpu {
                         self.r[14] = count - elems;
                         self.next_pc = self.pc.wrapping_add(4).wrapping_sub(imm);
                     } else {
-                        self.r[14] = 0;
+                        // the loop ends; LR keeps the count of the last iteration (FVP)
                         self.set_ltpsize(16);
                     }
                 } else if lr {
@@ -1125,10 +1158,14 @@ impl Cpu {
         } else {
             v |= (1 << 18) | (1 << 19);
         }
-        if self.secure && !alt {
+        if self.secure {
+            // the security fields are returned from Secure state regardless of A
             let (s, _) = self.attribution(bus, addr);
             if s {
                 v |= 1 << 22;
+            }
+            if let Some(r) = bus.idau_region(addr) {
+                v |= (r << 24) | (1 << 23);
             }
             if self.sau.ctrl & 1 != 0 {
                 for i in 0..8 {
@@ -1166,7 +1203,8 @@ impl Cpu {
             17 | 18 => self.basepri[self.st()] as u32,
             19 => self.faultmask[self.st()] as u32,
             20 => self.control(),
-            0x20..=0x27 if self.secure && priv_ => self.pac_key[(sysm - 0x20) as usize & 3],
+            0x20..=0x27 if self.secure && priv_ && self.pacbti => self.pac_key[(sysm - 0x20) as usize & 3],
+            0x20..=0x27 if self.secure && priv_ => 0,
             0x88 if self.secure && priv_ => self.sp_of(false, false),
             0x89 if self.secure && priv_ => self.sp_of(false, true),
             0x8A if self.secure && priv_ => self.msplim[NS],
@@ -1219,7 +1257,7 @@ impl Cpu {
                     self.set_basepri(nv);
                 }
             }
-            19 if self.execution_priority() > -1 => self.set_faultmask(v & 1 != 0),
+            19 if v & 1 == 0 || self.execution_priority() > -1 => self.set_faultmask(v & 1 != 0),
             20 => {
                 let mut nv = v & 0xF;
                 if self.handler_mode() {
@@ -1375,6 +1413,11 @@ impl Cpu {
 
     /// `ExecuteFPCheck()`: access check, lazy state preservation, FP context creation.
     pub(crate) fn fp_check<B: Bus>(&mut self, bus: &mut B) -> Result<(), Trap> {
+        self.fp_check_ltp(bus, true)
+    }
+
+    /// `ExecuteFPCheck()` with the reserved-LTPSIZE check optional (VMSR FPSCR repairs it).
+    pub(crate) fn fp_check_ltp<B: Bus>(&mut self, bus: &mut B, check_ltp: bool) -> Result<(), Trap> {
         let st = self.st();
         let cp10 = (self.cpacr[st] >> 20) & 3;
         if cp10 == 0 || cp10 == 2 || (cp10 == 1 && !self.privileged()) {
@@ -1386,6 +1429,10 @@ impl Cpu {
         if self.cppwr & (1 << 20) != 0 {
             // CP10 is powered off (SU10)
             return Err(Trap::Usage(CFSR_NOCP));
+        }
+        if check_ltp && (self.fpscr >> 16) & 7 > 4 {
+            // reserved LTPSIZE (only VMSR FPSCR can repair it)
+            return Err(Trap::Usage(CFSR_INVSTATE));
         }
         if self.fpccr[S] & 1 != 0 {
             self.preserve_fp_state(bus, S);
@@ -1425,9 +1472,10 @@ impl Cpu {
                 let _ = bus.write(self.now, base + 0x48 + 4 * (i - 16), 4, self.s[i as usize], ns, false);
             }
             self.s = [0; 32];
-            self.fpscr = 0;
             self.vpr = 0;
         }
+        // the context starts afresh (FPDSCR controls, no flags, LTPSIZE = 0b100)
+        self.fpscr = (self.fpdscr[st] & 0x07C0_0000) | crate::fpu::FPSCR_RESET;
         if err {
             self.bfsr |= (CFSR_LSPERR >> 8) as u8;
             if self.fpccr[st] & (1 << 6) != 0 {
@@ -1441,7 +1489,7 @@ impl Cpu {
     }
 
     fn exec_vfp<B: Bus>(&mut self, bus: &mut B, v: Vfp) -> Result<u32, Trap> {
-        self.fp_check(bus)?;
+        self.fp_check_ltp(bus, !matches!(v, Vfp::Vmsr { reg: 1, .. }))?;
         let mut st = self.fpscr;
         match v {
             Vfp::Arith { op, prec, d, n, m } => {
@@ -1497,19 +1545,26 @@ impl Cpu {
                 self.s[sd as usize & 31] = r;
             }
             Vfp::CvtFromInt { signed, prec, d, sm } => {
-                let r = fpu::from_fixed(self.s[sm as usize & 31], prec, 32, 0, !signed, true, &mut st);
+                let r = fpu::from_fixed(self.s[sm as usize & 31], prec, 32, 0, !signed, false, &mut st);
                 self.fp_set(prec, d, r);
             }
             Vfp::CvtFixed { to_fixed, signed, bits, frac, prec, d } => {
                 let x = self.fp_get(prec, d);
                 let r = if to_fixed {
-                    fpu::to_fixed(x, prec, bits as u32, frac as u32, !signed, Some(Rounding::Zero), &mut st) as u64
+                    let r = fpu::to_fixed(x, prec, bits as u32, frac as u32, !signed, Some(Rounding::Zero), &mut st);
+                    // a signed result fills a D register sign-extended (FVP)
+                    if prec == Prec::D && signed {
+                        r as i32 as i64 as u64
+                    } else {
+                        r as u64
+                    }
                 } else {
                     let int = match prec {
                         Prec::D => x as u32,
                         _ => x as u32,
                     };
-                    fpu::from_fixed(int, prec, bits as u32, frac as u32, !signed, false, &mut st)
+                    // the FVP rounds the fixed-point form to nearest regardless of FPSCR.RMode
+                    fpu::from_fixed(int, prec, bits as u32, frac as u32, !signed, true, &mut st)
                 };
                 self.fp_set(prec, d, r);
             }
@@ -1521,7 +1576,10 @@ impl Cpu {
                 } else {
                     let x = self.s[m as usize & 31];
                     let h = if top { x >> 16 } else { x & 0xFFFF };
-                    let r = fpu::convert(h as u64, Prec::H, prec, &mut st);
+                    // the FVP flushes a denormal half input under FZ16 only for the single
+                    // precision destination
+                    let flush = prec == Prec::S;
+                    let r = fpu::convert_from_half(h as u64, prec, flush, &mut st);
                     self.fp_set(prec, d, r);
                 }
             }
@@ -1696,7 +1754,14 @@ impl Cpu {
             Vfp::Vmsr { rt, reg } => {
                 let v = self.reg(rt);
                 match reg {
-                    1 => st = v & fpu::FPSCR_MASK,
+                    1 => {
+                        st = v & fpu::FPSCR_MASK;
+                        if (st >> 16) & 7 > 4 {
+                            // reserved LTPSIZE: the FVP performs the write and takes INVSTATE
+                            self.fpscr = st;
+                            return Err(Trap::Usage(CFSR_INVSTATE));
+                        }
+                    }
                     2 => st = (st & 0x07FF_FFFF) | (v & 0xF800_0000),
                     12 => self.vpr = v & 0xFFFF_000F | (v & 0xFF00_0000) | (v & 0x00FF_0000),
                     13 => self.vpr = (self.vpr & 0xFFFF_0000) | (v & 0xFFFF),
@@ -1711,29 +1776,37 @@ impl Cpu {
                 }
             }
             Vfp::Vlstm { rn } => {
-                if self.secure {
+                if self.secure && self.sfpa {
                     let base = self.reg(rn) & !7;
-                    if self.sfpa {
-                        for i in 0..32u32 {
-                            let v = self.s[i as usize];
-                            self.mem_write(bus, base + 4 * i, 4, v, true, false)?;
-                        }
-                        self.mem_write(bus, base + 0x80, 4, st, true, false)?;
-                        let vpr = self.vpr;
-                        self.mem_write(bus, base + 0x84, 4, vpr, true, false)?;
+                    self.fpcar[S] = base;
+                    self.fpccr[S] |= 1 << 2; // S
+                    if self.fpccr[S] & (1 << 30) != 0 {
+                        // LSPEN: the save happens at the next floating-point instruction
+                        self.fpccr[S] |= 1;
+                    } else {
+                        self.fpccr[S] |= 1;
+                        self.preserve_fp_state(bus, S);
+                        st = self.fpscr;
                     }
-                    self.fpccr[S] &= !1;
                 }
             }
             Vfp::Vlldm { rn } => {
-                if self.secure {
+                if self.secure && self.sfpa {
                     let base = self.reg(rn) & !7;
-                    if self.sfpa {
-                        for i in 0..32u32 {
+                    if self.fpccr[S] & 1 != 0 {
+                        // the lazy save never happened: the registers still hold the context
+                        self.fpccr[S] &= !1;
+                    } else {
+                        for i in 0..16u32 {
                             self.s[i as usize] = self.mem_read(bus, base + 4 * i, 4, true, false)?;
                         }
-                        st = self.mem_read(bus, base + 0x80, 4, true, false)? & fpu::FPSCR_MASK;
-                        self.vpr = self.mem_read(bus, base + 0x84, 4, true, false)? & 0xFFFF_000F;
+                        st = self.mem_read(bus, base + 0x40, 4, true, false)? & fpu::FPSCR_MASK;
+                        self.vpr = self.mem_read(bus, base + 0x44, 4, true, false)? & 0x00FF_FFFF;
+                        if self.fpccr[S] & (1 << 26) != 0 {
+                            for i in 16..32u32 {
+                                self.s[i as usize] = self.mem_read(bus, base + 0x48 + 4 * (i - 16), 4, true, false)?;
+                            }
+                        }
                     }
                 }
             }

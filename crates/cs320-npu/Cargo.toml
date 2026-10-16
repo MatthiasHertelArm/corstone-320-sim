@@ -1,0 +1,13 @@
+[package]
+name = "cs320-npu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Functional model of the Arm Ethos-U85 NPU command stream (no timing, host speed)"
+
+[dependencies]
+log.workspace = true
+
+[dev-dependencies]
+env_logger = "0.11"

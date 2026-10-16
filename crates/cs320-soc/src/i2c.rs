@@ -38,7 +38,19 @@ pub struct SbconI2c {
 
 impl SbconI2c {
     pub fn new(bus: usize) -> Self {
-        SbconI2c { bus, scl: true, sda: true, slave_sda: true, state: State::Idle, shift: 0, started: false, expect_address: false, reading: false, ack: false, tx_byte: 0 }
+        SbconI2c {
+            bus,
+            scl: true,
+            sda: true,
+            slave_sda: true,
+            state: State::Idle,
+            shift: 0,
+            started: false,
+            expect_address: false,
+            reading: false,
+            ack: false,
+            tx_byte: 0,
+        }
     }
 
     pub fn reset(&mut self) {

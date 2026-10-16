@@ -26,13 +26,18 @@ debug-adapters:
             yml-node: headless
             type: enum
             values:
-              - name: "No"
-                value: false
+              - name: Window
+                value: window
                 description: Show the board window
-              - name: "Yes"
-                value: true
+              - name: Headless
+                value: headless
                 description: No window; the UART goes to the terminal
-            default: false
+            default: window
+          - name: Camera
+            description: "Camera source of the capture peripheral: pattern, none, live (host webcam), an image file or a folder of images"
+            yml-node: camera
+            type: string
+            default: pattern
       - section: Telnet
         description: Target UART on a TCP port (VS Code Serial Monitor, TCP mode)
         yml-node: telnet

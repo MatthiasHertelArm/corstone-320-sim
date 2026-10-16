@@ -24,13 +24,25 @@ pub struct SysTick {
 
 impl Default for SysTick {
     fn default() -> Self {
-        SysTick { ctrl: 0, load: 0, countflag: false, next_wrap: Ticks::MAX, stopped_val: 0, periodic: true, calib: 0xC000_0000 }
+        SysTick { ctrl: 0, load: 0, countflag: false, next_wrap: Ticks::MAX, stopped_val: 0, periodic: true, calib: 0 }
     }
 }
+
+/// Ticks of one SysTick count from the external reference clock (25 kHz on the FVP).
+const SYSTICK_REF_PERIOD: Ticks = cs320_core::time::TICKS_PER_SEC / 25_000;
 
 impl SysTick {
     fn enabled(&self) -> bool {
         self.ctrl & 1 != 0
+    }
+
+    /// Ticks per count: the processor clock (CLKSOURCE = 1) or the reference clock.
+    fn period(&self) -> Ticks {
+        if self.ctrl & 4 != 0 {
+            TICKS_PER_CPU_CYCLE
+        } else {
+            SYSTICK_REF_PERIOD
+        }
     }
 
     pub fn value(&self, now: Ticks) -> u32 {
@@ -40,7 +52,7 @@ impl SysTick {
         if now >= self.next_wrap {
             return 0;
         }
-        let r = (self.next_wrap - now) / TICKS_PER_CPU_CYCLE;
+        let r = (self.next_wrap - now) / self.period();
         if self.periodic {
             (r % (self.load as u64 + 1)) as u32
         } else {
@@ -51,13 +63,13 @@ impl SysTick {
     fn start_from(&mut self, now: Ticks, val: u32) {
         if val == 0 {
             self.periodic = true;
-            self.next_wrap = if self.load == 0 { Ticks::MAX } else { now + (self.load as u64 + 1) * TICKS_PER_CPU_CYCLE };
+            self.next_wrap = if self.load == 0 { Ticks::MAX } else { now + (self.load as u64 + 1) * self.period() };
             if self.load == 0 {
                 self.stopped_val = 0;
             }
         } else {
             self.periodic = false;
-            self.next_wrap = now + val as u64 * TICKS_PER_CPU_CYCLE;
+            self.next_wrap = now + val as u64 * self.period();
         }
     }
 
@@ -67,7 +79,7 @@ impl SysTick {
             self.next_wrap = Ticks::MAX;
             self.stopped_val = 0;
         } else {
-            self.next_wrap = t + (self.load as u64 + 1) * TICKS_PER_CPU_CYCLE;
+            self.next_wrap = t + (self.load as u64 + 1) * self.period();
         }
     }
 
@@ -198,14 +210,14 @@ pub struct Dwt {
     pub sleepcnt: u32,
     pub lsucnt: u32,
     pub foldcnt: u32,
-    pub comp: [u32; 4],
-    pub function: [u32; 4],
+    pub comp: [u32; 8],
+    pub function: [u32; 8],
 }
 
 impl Default for Dwt {
     fn default() -> Self {
         Dwt {
-            ctrl: 0x4000_0000,
+            ctrl: 8 << 28,
             cyc_base: 0,
             cyc_origin: 0,
             cyc_running: false,
@@ -214,8 +226,8 @@ impl Default for Dwt {
             sleepcnt: 0,
             lsucnt: 0,
             foldcnt: 0,
-            comp: [0; 4],
-            function: [0; 4],
+            comp: [0; 8],
+            function: [0; 8],
         }
     }
 }
@@ -223,7 +235,8 @@ impl Default for Dwt {
 impl Dwt {
     pub fn cyccnt(&self, now: Ticks) -> u32 {
         if self.cyc_running {
-            self.cyc_base.wrapping_add(((now - self.cyc_origin) / TICKS_PER_CPU_CYCLE) as u32)
+            // the FVP advances CYCCNT once per eight processor cycles
+            self.cyc_base.wrapping_add(((now - self.cyc_origin) / (8 * TICKS_PER_CPU_CYCLE)) as u32)
         } else {
             self.cyc_base
         }
@@ -327,22 +340,18 @@ impl Pmu {
     }
 
     pub fn ccntr(&self, cycles: u64) -> u64 {
-        if self.running && self.cntenset & (1 << 31) != 0 {
-            self.ccntr_base.wrapping_add(cycles - self.origin_cycles)
-        } else {
-            self.ccntr_base
-        }
+        // the FVP's cycle counter does not advance
+        let _ = cycles;
+        self.ccntr_base
     }
 
     pub fn evcntr(&self, i: usize, cycles: u64, instret: u64) -> u32 {
         if !self.running || self.cntenset & (1 << i) == 0 {
             return self.evcntr_base[i] & 0xFFFF;
         }
-        let d = match self.evtyper[i] & 0xFFFF {
-            0x0011 => cycles - self.origin_cycles,
-            0x0008 => instret - self.origin_instret,
-            _ => 0,
-        };
+        // the FVP's PMU counts nothing but software increments (SW_INCR)
+        let _ = (cycles, instret);
+        let d = 0u64;
         (self.evcntr_base[i] as u64 + d) as u32 & 0xFFFF
     }
 
@@ -358,32 +367,35 @@ impl Pmu {
     }
 }
 
-const SCS_PIDR: [u32; 12] = [0x04, 0, 0, 0, 0x0C, 0xB0, 0x0B, 0x00, 0x0D, 0xE0, 0x05, 0xB1];
-const DWT_PIDR: [u32; 12] = [0x04, 0, 0, 0, 0x02, 0xB0, 0x3B, 0x00, 0x0D, 0xE0, 0x05, 0xB1];
-const FPB_PIDR: [u32; 12] = [0x04, 0, 0, 0, 0x03, 0xB0, 0x2B, 0x00, 0x0D, 0xE0, 0x05, 0xB1];
-const ITM_PIDR: [u32; 12] = [0x04, 0, 0, 0, 0x01, 0xB0, 0x3B, 0x00, 0x0D, 0xE0, 0x05, 0xB1];
-const PMU_PIDR: [u32; 12] = [0x04, 0, 0, 0, 0x04, 0xB0, 0x6B, 0x00, 0x0D, 0xE0, 0x05, 0xB1];
-const TPIU_PIDR: [u32; 12] = [0x04, 0, 0, 0, 0xA1, 0xB9, 0x0B, 0x00, 0x0D, 0x90, 0x05, 0xB1];
-const ROM_PIDR: [u32; 12] = [0x04, 0, 0, 0, 0xC4, 0xB4, 0x0B, 0x00, 0x0D, 0x10, 0x05, 0xB1];
+const SCS_PIDR: [u32; 12] = [0x04, 0, 0, 0, 0x23, 0xBD, 0x0B, 0x00, 0x0D, 0x90, 0x05, 0xB1];
+const DWT_PIDR: [u32; 12] = [0x04, 0, 0, 0, 0x23, 0xBD, 0x0B, 0x00, 0x0D, 0x90, 0x05, 0xB1];
+const FPB_PIDR: [u32; 12] = [0x04, 0, 0, 0, 0x23, 0xBD, 0x0B, 0x00, 0x0D, 0x90, 0x05, 0xB1];
+const ITM_PIDR: [u32; 12] = [0x04, 0, 0, 0, 0x23, 0xBD, 0x0B, 0x00, 0x0D, 0x90, 0x05, 0xB1];
+const PMU_PIDR: [u32; 12] = [0x04, 0, 0, 0, 0x00, 0xB0, 0x03, 0x00, 0x0D, 0x90, 0x05, 0xB1];
+const TPIU_PIDR: [u32; 12] = [0x04, 0, 0, 0, 0xA9, 0xB9, 0x0B, 0x00, 0x0D, 0x90, 0x05, 0xB1];
+const ROM_PIDR: [u32; 12] = [0x04, 0, 0, 0, 0xC9, 0xB4, 0x0B, 0x00, 0x0D, 0x10, 0x05, 0xB1];
+
+/// FUNCTION[31:27] (ID) of the eight DWT comparators as the FVP reports them.
+const DWT_FUNCTION_ID: [u32; 8] = [0x5800_0000, 0xF000_0000, 0x5000_0000, 0xF000_0000, 0x5000_0000, 0xD000_0000, 0x5000_0000, 0xD000_0000];
 
 /// Values of the SCB identification registers of a Cortex-M85 (to be compared with the FVP).
 pub const CPUID: u32 = 0x411F_D230;
 const ID_REGS: [(u32, u32); 17] = [
-    (0xED40, 0x0000_0030), // ID_PFR0
-    (0xED44, 0x0000_0520), // ID_PFR1
-    (0xED48, 0x0020_0000), // ID_DFR0
+    (0xED40, 0x2000_0030), // ID_PFR0
+    (0xED44, 0x0000_0230), // ID_PFR1
+    (0xED48, 0x1020_0000), // ID_DFR0
     (0xED4C, 0x0000_0000), // ID_AFR0
-    (0xED50, 0x0010_1F40), // ID_MMFR0
+    (0xED50, 0x0011_1040), // ID_MMFR0
     (0xED54, 0x0000_0000), // ID_MMFR1
     (0xED58, 0x0100_0000), // ID_MMFR2
-    (0xED5C, 0x0000_0000), // ID_MMFR3
-    (0xED60, 0x0809_2400), // ID_ISAR0
-    (0xED64, 0x0211_2000), // ID_ISAR1
+    (0xED5C, 0x0000_0011), // ID_MMFR3
+    (0xED60, 0x0114_3110), // ID_ISAR0
+    (0xED64, 0x0221_2000), // ID_ISAR1
     (0xED68, 0x2023_2232), // ID_ISAR2
     (0xED6C, 0x0111_1131), // ID_ISAR3
     (0xED70, 0x0131_0132), // ID_ISAR4
     (0xED74, 0x0000_0000), // ID_ISAR5
-    (0xED78, 0x0900_0003), // CLIDR
+    (0xED78, 0x0920_0003), // CLIDR
     (0xED7C, 0x8303_C003), // CTR
     (0xED90, 0x0000_0800), // MPU_TYPE
 ];
@@ -509,11 +521,13 @@ impl Cpu {
         }
         Ok(match a {
             // ITM
-            0xE000_0000..=0xE000_007C => 1,
+            0xE000_0000..=0xE000_007C => 2,
             0xE000_0E00 => self.itm.ter,
             0xE000_0E40 => self.itm.tpr,
             0xE000_0E80 => self.itm.tcr,
             0xE000_0FB4 => 0,
+            0xE000_0FBC => 0x4770_1A01,
+            0xE000_0FCC => 0x43,
             0xE000_0FD0..=0xE000_0FFC => id_reg(&ITM_PIDR, a - 0xE000_0000),
             // DWT
             0xE000_1000 => self.dwt.ctrl,
@@ -523,8 +537,8 @@ impl Cpu {
             0xE000_1010 => self.dwt.sleepcnt,
             0xE000_1014 => self.dwt.lsucnt,
             0xE000_1018 => self.dwt.foldcnt,
-            0xE000_101C => self.pc,
-            0xE000_1020..=0xE000_105C => {
+            0xE000_101C => 0, // PCSR: not implemented (FVP)
+            0xE000_1020..=0xE000_109C => {
                 let i = ((a - 0xE000_1020) / 16) as usize;
                 match (a - 0xE000_1020) % 16 {
                     0 => self.dwt.comp[i],
@@ -533,12 +547,12 @@ impl Cpu {
                         if !debug {
                             self.dwt.function[i] &= !(1 << 24);
                         }
-                        f | (0b1011 << 27)
+                        f | DWT_FUNCTION_ID[i]
                     }
                     _ => 0,
                 }
             }
-            0xE000_1FBC => 0x47701A02,
+            0xE000_1FBC => 0x4771_1A02,
             0xE000_1FD0..=0xE000_1FFC => id_reg(&DWT_PIDR, a - 0xE000_1000),
             // FPB
             0xE000_2000 => self.fpb.ctrl | (8 << 4) | (1 << 28),
@@ -557,34 +571,39 @@ impl Cpu {
             0xE000_3C00 | 0xE000_3C20 => self.pmu.cntenset,
             0xE000_3C40 | 0xE000_3C60 => self.pmu.intenset,
             0xE000_3C80 | 0xE000_3CC0 => self.pmu.ovsset,
-            0xE000_3E00 => 0x0000_0408 | (1 << 23),
+            0xE000_3E00 => 0x00A0_5F08,
             0xE000_3E04 => self.pmu.ctrl,
-            0xE000_3FB8 => 0,
-            0xE000_3FBC => 0x47702A06,
+            0xE000_3FB8 => 0x00AA_00AA,
+            0xE000_3FBC => 0x4770_0A06,
             0xE000_3FCC => 0x16,
             0xE000_3FD0..=0xE000_3FFC => id_reg(&PMU_PIDR, a - 0xE000_3000),
             // Cortex-M85 processor-specific registers
             0xE001_E000 => self.mscr,
             0xE001_E004 => self.pfcr,
-            0xE001_E010 => 0x0000_0007 | (0x6 << 3), // ITCMCR: enabled, 32 KB
-            0xE001_E014 => 0x0000_0007 | (0x6 << 3), // DTCMCR
-            0xE001_E018 => 0,
+            0xE001_E010 => 0x0000_0001 | (0x6 << 3), // ITCMCR: enabled, 32 KB
+            0xE001_E014 => 0x0000_0001 | (0x6 << 3), // DTCMCR
+            0xE001_E018 => 5,                        // PAHBCR
+            0xE001_E200 => 0x0080_0000,
             0xE001_E300 => self.cpdlpstate,
             0xE001_E304 => self.dpdlpstate,
+            0xE001_E500 | 0xE001_E600 => 3,           // ITGU_CTRL, DTGU_CTRL
+            0xE001_E504 | 0xE001_E604 => 0x8000_0406, // ITGU_CFG, DTGU_CFG
             0xE001_E500..=0xE001_E6FF => 0,
             // TPIU
-            0xE004_0000 => 0xF,
-            0xE004_0004 => 1,
-            0xE004_0FC8 => 0xCA0,
+            0xE004_0000 => 0,
+            0xE004_0004 => 0,
+            0xE004_0FA0 => 0xFFFF_FFFF,
+            0xE004_0FC8 => 1,
+            0xE004_0FCC => 0x11,
             0xE004_0FD0..=0xE004_0FFC => id_reg(&TPIU_PIDR, a - 0xE004_0000),
             // ROM table
             0xE00F_F000 => 0xFFF0_F003,
             0xE00F_F004 => 0xFFF0_2003,
             0xE00F_F008 => 0xFFF0_3003,
             0xE00F_F00C => 0xFFF0_1003,
-            0xE00F_F010 => 0xFFF0_4003,
-            0xE00F_F014 => 0xFFF4_1003,
-            0xE00F_F018 => 0xFFF4_2002,
+            0xE00F_F010 => 0xFFF4_1003,
+            0xE00F_F014 => 0xFFF4_2003,
+            0xE00F_F018 => 0xFFF0_4003,
             0xE00F_FFCC => 1,
             0xE00F_FFD0..=0xE00F_FFFC => id_reg(&ROM_PIDR, a - 0xE00F_F000),
             _ => 0,
@@ -690,7 +709,7 @@ impl Cpu {
             0xD3C => self.afsr,
             0xD80 => match self.csselr & 1 {
                 0 => 0xF01F_E019,
-                _ => 0x201F_E019,
+                _ => 0xF03F_E009,
             },
             0xD84 => self.csselr,
             0xD88 => self.cpacr[i],
@@ -783,6 +802,7 @@ impl Cpu {
             0xF44 => MVFR1,
             0xF48 => MVFR2,
             0xFBC => 0x47702A04,
+            0xFB8 => 0x00AA_00AA,
             0xFD0..=0xFFC => id_reg(&SCS_PIDR, off),
             _ => ID_REGS.iter().find(|(o, _)| *o - 0xE000 == off).map(|(_, v)| *v).unwrap_or(0),
         })
@@ -790,7 +810,6 @@ impl Cpu {
 
     fn icsr(&self, view: View) -> u32 {
         let secure_view = view == View::Secure;
-        let i = !secure_view as usize;
         let vectpending = self.vect_pending();
         let mut isrpending = false;
         for w in 0..8 {
@@ -810,7 +829,6 @@ impl Cpu {
             | ((vectpending & 0x1FF) << 12)
             | ((rettobase as u32) << 11)
             | vectactive
-            | if i == S && !self.bfhfnmins { 0 } else { 0 }
     }
 
     fn shcsr(&self, view: View) -> u32 {
@@ -884,7 +902,7 @@ impl Cpu {
             0xE000_1010 => self.dwt.sleepcnt = v & 0xFF,
             0xE000_1014 => self.dwt.lsucnt = v & 0xFF,
             0xE000_1018 => self.dwt.foldcnt = v & 0xFF,
-            0xE000_1020..=0xE000_105C => {
+            0xE000_1020..=0xE000_109C => {
                 let i = ((a - 0xE000_1020) / 16) as usize;
                 match (a - 0xE000_1020) % 16 {
                     0 => self.dwt.comp[i] = merge(self.dwt.comp[i], v, mask),
@@ -897,7 +915,7 @@ impl Cpu {
             }
             0xE000_2008..=0xE000_2024 => {
                 let i = ((a - 0xE000_2008) / 4) as usize;
-                self.fpb.comp[i] = merge(self.fpb.comp[i], v, mask) & 0xFFFF_FFFF;
+                self.fpb.comp[i] = merge(self.fpb.comp[i], v, mask);
             }
             0xE000_3000..=0xE000_301C => {
                 let i = ((a - 0xE000_3000) / 4) as usize;
@@ -1064,10 +1082,8 @@ impl Cpu {
                     let p = ((v >> (8 * k)) & 0xE0) as u8;
                     match n {
                         EXC_MEMMANAGE | EXC_USAGEFAULT | EXC_SVCALL | EXC_PENDSV | EXC_SYSTICK => self.prio_sys[i][n] = p,
-                        EXC_BUSFAULT | EXC_SECUREFAULT | EXC_DEBUGMON => {
-                            if secure_view || (n == EXC_BUSFAULT && self.bfhfnmins) {
-                                self.prio_sys[S][n] = p;
-                            }
+                        EXC_BUSFAULT | EXC_SECUREFAULT | EXC_DEBUGMON if secure_view || (n == EXC_BUSFAULT && self.bfhfnmins) => {
+                            self.prio_sys[S][n] = p;
                         }
                         _ => {}
                     }
@@ -1126,18 +1142,10 @@ impl Cpu {
                     self.bfsr &= !((c >> 8) as u8);
                 }
             }
-            0xD2C => {
-                if secure_view || self.bfhfnmins {
-                    self.hfsr &= !(v & mask);
-                }
-            }
+            0xD2C if secure_view || self.bfhfnmins => self.hfsr &= !(v & mask),
             0xD30 => self.dfsr &= !(v & mask),
             0xD34 => self.mmfar[i] = merge(self.mmfar[i], v, mask),
-            0xD38 => {
-                if secure_view || self.bfhfnmins {
-                    self.bfar = merge(self.bfar, v, mask);
-                }
-            }
+            0xD38 if secure_view || self.bfhfnmins => self.bfar = merge(self.bfar, v, mask),
             0xD3C => self.afsr &= !(v & mask),
             0xD84 => self.csselr = merge(self.csselr, v, mask) & 0xF,
             0xD88 => {
@@ -1149,7 +1157,7 @@ impl Cpu {
             0xD98 => self.mpu[i].rnr = merge(self.mpu[i].rnr, v, mask) & 7,
             0xD9C | 0xDA4 | 0xDAC | 0xDB4 => {
                 let r = ((self.mpu[i].rnr & 7) as usize + ((off - 0xD9C) / 8) as usize) & 7;
-                self.mpu[i].rbar[r] = merge(self.mpu[i].rbar[r], v, mask) & 0xFFFF_FFFF;
+                self.mpu[i].rbar[r] = merge(self.mpu[i].rbar[r], v, mask);
             }
             0xDA0 | 0xDA8 | 0xDB0 | 0xDB8 => {
                 let r = ((self.mpu[i].rnr & 7) as usize + ((off - 0xDA0) / 8) as usize) & 7;
@@ -1222,7 +1230,7 @@ impl Cpu {
                 }
             }
             0xF38 => self.fpcar[i] = merge(self.fpcar[i], v, mask) & !7,
-            0xF3C => self.fpdscr[i] = merge(self.fpdscr[i], v, mask) & 0x07C0_0000,
+            0xF3C => self.fpdscr[i] = (merge(self.fpdscr[i], v, mask) & 0x07C0_0000) | crate::fpu::FPSCR_RESET,
             _ => {}
         }
         Ok(())

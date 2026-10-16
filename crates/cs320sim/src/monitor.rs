@@ -85,6 +85,9 @@ pub fn handle(sim: &Simulator, cmd: &str) -> Option<String> {
             sim.send(Cmd::UartIn(n, text.into_bytes()));
             "sent\n".into()
         }
+        ["camera", src] if camera_source(src).is_live() => {
+            "camera: live needs the webcam started at start-up: run with --camera live (and --camera-device N)\n".to_string()
+        }
         ["camera", src] => {
             sim.send(Cmd::Input(Input::Camera(camera_source(src))));
             format!("camera: {src}\n")

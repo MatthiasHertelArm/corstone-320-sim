@@ -134,6 +134,9 @@ pub struct Status {
     pub npu_warning: bool,
 }
 
+/// A block of speaker samples for playback: (time, rate, channels, samples).
+pub type SpeakerBlock = (Ticks, u32, u32, Vec<i16>);
+
 /// Shared between the simulation thread and the observers.
 #[derive(Default)]
 pub struct Shared {
@@ -142,15 +145,32 @@ pub struct Shared {
     pub displays: Mutex<Vec<Option<Frame>>>,
     /// Latest camera frame delivered to the target (for the preview).
     pub camera_preview: Mutex<Option<Rgba>>,
-    /// Speaker sample blocks for playback: (time, rate, channels, samples).
-    pub speaker: Mutex<Vec<(Ticks, u32, u32, Vec<i16>)>>,
+    /// Speaker sample blocks for playback.
+    pub speaker: Mutex<Vec<SpeakerBlock>>,
     uart_subscribers: Mutex<Vec<(usize, Sender<Vec<u8>>)>>,
+    /// The most recent bytes each UART sent (up to [`UART_HISTORY`]), for observers that
+    /// subscribe after the boot banner (the GUI window opens later than the target boots).
+    uart_history: Mutex<Vec<Vec<u8>>>,
     stop_subscribers: Mutex<Vec<Sender<HaltReason>>>,
 }
 
+/// Bytes of UART output kept per UART for late subscribers.
+pub const UART_HISTORY: usize = 256 * 1024;
+
 impl Shared {
     fn broadcast_uart(&self, n: usize, data: &[u8]) {
+        // both locks, subscribers first, as in `subscribe_uart_with_history`
         let mut subs = self.uart_subscribers.lock().unwrap();
+        let mut hist = self.uart_history.lock().unwrap();
+        if hist.len() <= n {
+            hist.resize(n + 1, Vec::new());
+        }
+        let h = &mut hist[n];
+        h.extend_from_slice(data);
+        if h.len() > UART_HISTORY {
+            let cut = h.len() - UART_HISTORY / 2;
+            h.drain(..cut);
+        }
         subs.retain(|(k, s)| *k != n || s.send(data.to_vec()).is_ok());
     }
 
@@ -259,6 +279,17 @@ impl Simulator {
         let (tx, rx) = unbounded();
         self.shared.uart_subscribers.lock().unwrap().push((n, tx));
         rx
+    }
+
+    /// Like [`subscribe_uart`](Self::subscribe_uart), and also returns what UART `n` sent
+    /// before the subscription (the last [`UART_HISTORY`] bytes at most), with no byte lost or
+    /// duplicated between the two.
+    pub fn subscribe_uart_with_history(&self, n: usize) -> (Vec<u8>, Receiver<Vec<u8>>) {
+        let (tx, rx) = unbounded();
+        let mut subs = self.shared.uart_subscribers.lock().unwrap();
+        let hist = self.shared.uart_history.lock().unwrap();
+        subs.push((n, tx));
+        (hist.get(n).cloned().unwrap_or_default(), rx)
     }
 
     /// Receives the reasons of debug halts.

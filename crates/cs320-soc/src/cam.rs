@@ -44,7 +44,21 @@ pub struct Camera {
 
 impl Camera {
     pub fn new() -> Self {
-        Camera { ctrl: 0, width: 640, height: 480, format: 2, frame_rate: 30, buffer: 0, stride: 0, irq_status: 0, irq_enable: 0, frame_count: 0, source: false, next: 0, buf: Vec::new() }
+        Camera {
+            ctrl: 0,
+            width: 640,
+            height: 480,
+            format: 2,
+            frame_rate: 30,
+            buffer: 0,
+            stride: 0,
+            irq_status: 0,
+            irq_enable: 0,
+            frame_count: 0,
+            source: false,
+            next: 0,
+            buf: Vec::new(),
+        }
     }
 
     pub fn reset(&mut self) {

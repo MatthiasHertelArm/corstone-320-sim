@@ -1,0 +1,14 @@
+# Groups of firmware/isa-test whose digest is known to differ from fixtures/isa_test.fvp.txt.
+# One group name per line; '#' starts a comment. crates/cs320-board/tests/reference.rs tolerates
+# these (and reports when one of them matches again, so it can be removed). The environment
+# variable ISA_TEST_KNOWN_MISMATCHES (comma-separated names) adds to this list for a single run.
+#
+# The remaining groups mix in the stale contents of a register after an UNDEFINED instruction
+# that the fault handler skipped (CSEL with the AL condition, PACG/AUTG without CFGPACBTI, VMRS
+# after an FPSCR write with a reserved LTPSIZE): what the FVP leaves in such a register is not
+# architected and the simulator's leftover differs. The value-by-value comparison of the verbose
+# builds of these groups shows no other difference.
+cs_al
+pacg2
+sysregs
+exceptions

@@ -30,7 +30,8 @@ pub struct Memory {
     pub sram: Vec<u8>,
     pub isram0: Vec<u8>,
     pub isram1: Vec<u8>,
-    pub qspi: Vec<u8>,
+    /// QSPI SRAM, allocated in chunks on first write like the DDR (128 MB on the FVP).
+    qspi: Vec<Option<Box<[u8]>>>,
     pub qspi_size: u32,
     ddr: Vec<Option<Box<[u8]>>>,
     /// Incremented whenever the loader or the debugger writes code memory.
@@ -53,7 +54,7 @@ impl Memory {
             sram: vec![0; SRAM_SIZE as usize],
             isram0: vec![0; ISRAM_SIZE as usize],
             isram1: vec![0; ISRAM_SIZE as usize],
-            qspi: vec![0; qspi_size as usize],
+            qspi: (0..(qspi_size as usize).div_ceil(CHUNK)).map(|_| None).collect(),
             qspi_size,
             ddr: (0..(DDR_SIZE as usize / CHUNK)).map(|_| None).collect(),
             code_gen: 0,
@@ -63,7 +64,7 @@ impl Memory {
     }
 
     fn fill_patterns(&mut self) {
-        for mem in [&mut self.rom, &mut self.sram, &mut self.qspi] {
+        for mem in [&mut self.rom, &mut self.sram] {
             for (i, w) in mem.chunks_mut(4).enumerate() {
                 let v = if i % 2 == 0 { FILL1 } else { FILL2 };
                 w.copy_from_slice(&v.to_le_bytes()[..w.len()]);
@@ -83,7 +84,7 @@ impl Memory {
         self.dtcm.fill(0);
         self.isram0.fill(0);
         self.isram1.fill(0);
-        for c in self.ddr.iter_mut() {
+        for c in self.ddr.iter_mut().chain(self.qspi.iter_mut()) {
             *c = None;
         }
         self.fill_patterns();
@@ -107,8 +108,15 @@ impl Memory {
                 }
             }
             0x28..=0x2F | 0x38..=0x3F => {
-                let b = (top & 0xF0) << 24 | 0x0800_0000;
-                (&mut self.qspi, b, self.qspi_size)
+                let off = addr & 0x07FF_FFFF;
+                if off >= self.qspi_size {
+                    return None;
+                }
+                let off = off as usize;
+                return Some(match &mut self.qspi[off / CHUNK] {
+                    Some(c) => Loc::Bytes(&mut c[..], off % CHUNK),
+                    None => Loc::Unallocated,
+                });
             }
             0x60..=0xDF => {
                 let off = (addr - 0x6000_0000) as usize;
@@ -127,18 +135,31 @@ impl Memory {
         }
     }
 
-    fn ddr_chunk(&mut self, addr: u32) -> &mut [u8] {
-        let off = (addr - 0x6000_0000) as usize;
+    /// The lazily allocated chunk holding `addr` (DDR or QSPI), filled with the FVP pattern.
+    fn lazy_chunk(&mut self, addr: u32) -> Option<(&mut [u8], usize)> {
+        let (chunks, off) = if (0x6000_0000..0xE000_0000).contains(&addr) {
+            (&mut self.ddr, (addr - 0x6000_0000) as usize)
+        } else {
+            let off = addr & 0x07FF_FFFF;
+            if off >= self.qspi_size {
+                return None;
+            }
+            (&mut self.qspi, off as usize)
+        };
         let chunk = off / CHUNK;
-        if self.ddr[chunk].is_none() {
+        if chunks[chunk].is_none() {
             let mut c = vec![0u8; CHUNK].into_boxed_slice();
             for (i, w) in c.chunks_mut(4).enumerate() {
                 let v = if i % 2 == 0 { FILL1 } else { FILL2 };
                 w.copy_from_slice(&v.to_le_bytes());
             }
-            self.ddr[chunk] = Some(c);
+            chunks[chunk] = Some(c);
         }
-        &mut self.ddr[chunk].as_mut().unwrap()[..]
+        Some((&mut chunks[chunk].as_mut().unwrap()[..], off % CHUNK))
+    }
+
+    fn is_lazy(addr: u32) -> bool {
+        matches!(addr >> 24, 0x28..=0x2F | 0x38..=0x3F | 0x60..=0xDF)
     }
 
     /// Reads a little-endian value of 1, 2 or 4 bytes; `None` outside the memories.
@@ -167,9 +188,8 @@ impl Memory {
 
     #[inline]
     pub fn write(&mut self, addr: u32, size: u8, v: u32) -> bool {
-        if (0x6000_0000..0xE000_0000).contains(&addr) {
-            let off = (addr - 0x6000_0000) as usize % CHUNK;
-            let c = self.ddr_chunk(addr);
+        if Self::is_lazy(addr) {
+            let Some((c, off)) = self.lazy_chunk(addr) else { return false };
             if off + size as usize > CHUNK {
                 return false;
             }
@@ -245,10 +265,11 @@ impl Memory {
         while i < data.len() {
             let a = addr.wrapping_add(i as u32);
             let n = (data.len() - i).min((0x1000 - (a & 0xFFF)) as usize);
-            if (0x6000_0000..0xE000_0000).contains(&a) {
-                let off = (a - 0x6000_0000) as usize % CHUNK;
-                let c = self.ddr_chunk(a);
-                c[off..off + n].copy_from_slice(&data[i..i + n]);
+            if Self::is_lazy(a) {
+                match self.lazy_chunk(a) {
+                    Some((c, off)) => c[off..off + n].copy_from_slice(&data[i..i + n]),
+                    None => ok = false,
+                }
             } else {
                 match self.resolve(a) {
                     Some(Loc::Bytes(m, o)) if o + n <= m.len() => m[o..o + n].copy_from_slice(&data[i..i + n]),

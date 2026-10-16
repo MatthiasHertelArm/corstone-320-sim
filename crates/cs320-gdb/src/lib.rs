@@ -9,8 +9,8 @@ mod packet;
 mod target;
 
 use crossbeam_channel::{select, unbounded, Receiver};
-use cs320_cpu::HaltReason;
 use cs320_board::runtime::{BpKind, Cmd, Simulator};
+use cs320_cpu::HaltReason;
 use packet::{escape, frame, hex, unescape, unhex, Incoming, Reader};
 use std::collections::BTreeMap;
 use std::io::Write;

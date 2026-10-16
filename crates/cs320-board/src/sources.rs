@@ -44,11 +44,12 @@ impl Rgba {
 }
 
 /// Where the camera frames come from.
-#[derive(Clone, Debug)]
+#[derive(Default, Clone, Debug)]
 pub enum CameraSource {
     /// No camera connected.
     None,
     /// A moving colour-bar test pattern with a frame counter.
+    #[default]
     TestPattern,
     /// One image.
     Image(PathBuf),
@@ -58,9 +59,9 @@ pub enum CameraSource {
     Live,
 }
 
-impl Default for CameraSource {
-    fn default() -> Self {
-        CameraSource::TestPattern
+impl CameraSource {
+    pub fn is_live(&self) -> bool {
+        matches!(self, CameraSource::Live)
     }
 }
 
@@ -80,7 +81,16 @@ pub struct Camera {
 
 impl Camera {
     pub fn new(source: CameraSource) -> Camera {
-        let mut c = Camera { source: CameraSource::None, frames: Vec::new(), index: 0, live: Arc::new(Mutex::new(None)), last_live: None, error: None, preview: None, counter: 0 };
+        let mut c = Camera {
+            source: CameraSource::None,
+            frames: Vec::new(),
+            index: 0,
+            live: Arc::new(Mutex::new(None)),
+            last_live: None,
+            error: None,
+            preview: None,
+            counter: 0,
+        };
         c.set_source(source);
         c
     }
@@ -96,7 +106,17 @@ impl Camera {
             },
             CameraSource::Folder(dir) => {
                 let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)
-                    .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| matches!(p.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(), Some("png" | "jpg" | "jpeg" | "bmp"))).collect())
+                    .map(|rd| {
+                        rd.flatten()
+                            .map(|e| e.path())
+                            .filter(|p| {
+                                matches!(
+                                    p.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(),
+                                    Some("png" | "jpg" | "jpeg" | "bmp")
+                                )
+                            })
+                            .collect()
+                    })
                     .unwrap_or_default();
                 paths.sort();
                 for p in paths {
@@ -152,10 +172,165 @@ impl Camera {
     }
 }
 
+/// A host webcam feeding the camera's live slot. It runs ffmpeg (`avfoundation` input on
+/// macOS, `v4l2` on Linux, `dshow` on Windows) and copies each raw RGB frame into the slot;
+/// dropping the webcam stops ffmpeg.
+pub struct Webcam {
+    child: std::process::Child,
+    reader: Option<std::thread::JoinHandle<()>>,
+    stopping: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Webcam {
+    /// Starts the camera `device` (the index in ffmpeg's device list) at `w` x `h`, 30 frames
+    /// per second.
+    pub fn start(slot: Arc<Mutex<Option<Rgba>>>, device: u32, w: u32, h: u32) -> Result<Webcam, String> {
+        use std::io::Read;
+        use std::process::{Command, Stdio};
+        let (format, input) = if cfg!(target_os = "macos") {
+            ("avfoundation", device.to_string())
+        } else if cfg!(target_os = "windows") {
+            ("dshow", format!("video={device}"))
+        } else {
+            ("v4l2", format!("/dev/video{device}"))
+        };
+        let mut child = Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-f", format, "-framerate", "30", "-video_size"])
+            .arg(format!("{w}x{h}"))
+            // the device's own format: macOS cameras do not offer the yuv420p ffmpeg picks by default
+            .args(if cfg!(target_os = "macos") { &["-pixel_format", "yuyv422"][..] } else { &[][..] })
+            .arg("-i")
+            .arg(&input)
+            .args(["-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|e| format!("ffmpeg: {e} (install ffmpeg to use a webcam)"))?;
+        let mut out = child.stdout.take().ok_or("ffmpeg: no output pipe")?;
+        let webcam_slot = slot.clone();
+        let stopping = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_flag = stopping.clone();
+        let reader = std::thread::spawn(move || {
+            let mut rgb = vec![0u8; (w * h * 3) as usize];
+            while out.read_exact(&mut rgb).is_ok() {
+                let mut data = vec![255u8; (w * h * 4) as usize];
+                for (d, s) in data.chunks_exact_mut(4).zip(rgb.chunks_exact(3)) {
+                    d[..3].copy_from_slice(s);
+                }
+                if let Ok(mut l) = slot.lock() {
+                    *l = Some(Rgba { width: w, height: h, data });
+                }
+            }
+            if !stop_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                log::warn!("webcam: no more frames (ffmpeg exited; see its message above)");
+            }
+        });
+        let webcam = Webcam { child, reader: Some(reader), stopping };
+        // the simulation must not start before the first frame: the camera's first snapshot
+        // would find no source and end the capture for good
+        let t0 = std::time::Instant::now();
+        while !webcam.reader.as_ref().is_some_and(|r| r.is_finished()) && t0.elapsed() < std::time::Duration::from_secs(10) {
+            if let Ok(l) = webcam_slot.lock() {
+                if l.is_some() {
+                    return Ok(webcam);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        Err(format!("webcam {device}: no frame within 10 s (ffmpeg's message is above)"))
+    }
+}
+
+impl Drop for Webcam {
+    fn drop(&mut self) {
+        self.stopping.store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(r) = self.reader.take() {
+            let _ = r.join();
+        }
+    }
+}
+
+/// A host microphone feeding the microphone's live slot: ffmpeg's `avfoundation` audio input
+/// (macOS), mono 48 kHz signed 16-bit samples. Dropping it stops ffmpeg.
+pub struct HostMic {
+    child: std::process::Child,
+    reader: Option<std::thread::JoinHandle<()>>,
+    stopping: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// The live slot keeps this many samples (2 s at 48 kHz); older ones are dropped.
+const MIC_LIVE_MAX: usize = 96_000;
+
+impl HostMic {
+    /// Starts the input `device` (ffmpeg's audio index, None for the system default).
+    pub fn start(slot: Arc<Mutex<std::collections::VecDeque<i16>>>, device: Option<u32>) -> Result<HostMic, String> {
+        use std::io::Read;
+        use std::process::{Command, Stdio};
+        if !cfg!(target_os = "macos") {
+            return Err("host microphone capture through ffmpeg is implemented for macOS only".into());
+        }
+        let input = format!(":{}", device.map(|d| d.to_string()).unwrap_or_else(|| "default".into()));
+        let mut child = Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-f", "avfoundation", "-i"])
+            .arg(&input)
+            .args(["-f", "s16le", "-ar", "48000", "-ac", "1", "-"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|e| format!("ffmpeg: {e} (install ffmpeg to use a microphone)"))?;
+        let mut out = child.stdout.take().ok_or("ffmpeg: no output pipe")?;
+        let mic_slot = slot.clone();
+        let stopping = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_flag = stopping.clone();
+        let reader = std::thread::spawn(move || {
+            let mut buf = vec![0u8; 4096];
+            while let Ok(n) = out.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                if let Ok(mut d) = mic_slot.lock() {
+                    d.extend(buf[..n].chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])));
+                    let excess = d.len().saturating_sub(MIC_LIVE_MAX);
+                    d.drain(..excess);
+                }
+            }
+            if !stop_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                log::warn!("microphone: no more samples (ffmpeg exited; see its message above)");
+            }
+        });
+        let mic = HostMic { child, reader: Some(reader), stopping };
+        // the first samples must be there before the simulation starts reading the microphone
+        let t0 = std::time::Instant::now();
+        while !mic.reader.as_ref().is_some_and(|r| r.is_finished()) && t0.elapsed() < std::time::Duration::from_secs(10) {
+            if slot.lock().map(|d| !d.is_empty()).unwrap_or(false) {
+                return Ok(mic);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        Err(format!("microphone {input}: no samples within 10 s (ffmpeg's message is above)"))
+    }
+}
+
+impl Drop for HostMic {
+    fn drop(&mut self) {
+        self.stopping.store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(r) = self.reader.take() {
+            let _ = r.join();
+        }
+    }
+}
+
 /// Colour bars with a moving marker and a seconds counter rendered as a bar.
 pub fn test_pattern(w: u32, h: u32, t: f64) -> Rgba {
     let mut data = vec![0u8; (w * h * 4) as usize];
-    let bars: [[u8; 3]; 8] = [[255, 255, 255], [255, 255, 0], [0, 255, 255], [0, 255, 0], [255, 0, 255], [255, 0, 0], [0, 0, 255], [16, 16, 16]];
+    let bars: [[u8; 3]; 8] =
+        [[255, 255, 255], [255, 255, 0], [0, 255, 255], [0, 255, 0], [255, 0, 255], [255, 0, 0], [0, 0, 255], [16, 16, 16]];
     let marker_x = ((t * 0.25).fract() * w as f64) as u32;
     for y in 0..h {
         for x in 0..w {
@@ -178,8 +353,9 @@ pub fn test_pattern(w: u32, h: u32, t: f64) -> Rgba {
 }
 
 /// Where the microphone samples come from.
-#[derive(Clone, Debug)]
+#[derive(Default, Clone, Debug)]
 pub enum MicSource {
+    #[default]
     Silence,
     /// A sine tone (Hz, amplitude 0..1).
     Tone(f64, f64),
@@ -187,12 +363,6 @@ pub enum MicSource {
     Wav(PathBuf),
     /// Samples pushed by the host (microphone thread).
     Live,
-}
-
-impl Default for MicSource {
-    fn default() -> Self {
-        MicSource::Silence
-    }
 }
 
 /// Microphone state: a mono source resampled to whatever rate the peripheral asks for.
@@ -237,7 +407,9 @@ impl Microphone {
                     self.wav_rate = spec.sample_rate;
                     let ch = spec.channels.max(1) as usize;
                     let samples: Vec<i16> = match spec.sample_format {
-                        hound::SampleFormat::Int => r.samples::<i32>().flatten().map(|s| (s >> (spec.bits_per_sample.saturating_sub(16))) as i16).collect(),
+                        hound::SampleFormat::Int => {
+                            r.samples::<i32>().flatten().map(|s| (s >> (spec.bits_per_sample.saturating_sub(16))) as i16).collect()
+                        }
                         hound::SampleFormat::Float => r.samples::<f32>().flatten().map(|s| (s.clamp(-1.0, 1.0) * 32767.0) as i16).collect(),
                     };
                     // mix down to mono
@@ -275,7 +447,15 @@ impl Microphone {
                     let mut l = self.live.lock().unwrap();
                     // consume at the ratio of the rates
                     let ratio = self.live_rate as f64 / rate as f64;
-                    let take = if ratio >= 1.0 { ratio as usize } else { if (i as f64 * ratio).fract() < ratio { 1 } else { 0 } };
+                    let take = if ratio >= 1.0 {
+                        ratio as usize
+                    } else {
+                        if (i as f64 * ratio).fract() < ratio {
+                            1
+                        } else {
+                            0
+                        }
+                    };
                     let mut s = 0.0;
                     for k in 0..take.max(1) {
                         if let Some(x) = l.pop_front() {

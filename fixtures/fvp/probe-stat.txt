@@ -1,0 +1,18 @@
+# FVP_Corstone_SSE-320, Fast Models [11.32+23 (Aug  9 2026)], Docker image cmsis-fvp-audit:11.32.23
+# Lines the model printed after the probe exited (SYS_EXIT), same run as probe.txt, started with --stat.
+
+Info: /OSCI/SystemC: Simulation stopped by user.
+
+--- Corstone_SSE_320_Main statistics: -----------------------------------------
+Simulated time                          : 3.893200s
+User time at initialisation             : 0.136976s
+User time                               : 0.119257s
+System time at initialisation           : 0.067988s
+System time                             : 0.005078s
+Wall time at initialisation             : 0.314281s
+Wall time                               : 0.124863s
+Performance index                       : 31.18
+mps4_board.subsystem.cpu0               : 779.52 MIPS (    97332669 Inst)
+Memory highwater mark at initialisation : 0x1831e000 bytes ( 0.378 GiB )
+Memory highwater mark                   : 0x19873000 bytes ( 0.399 GiB )
+-------------------------------------------------------------------------------
