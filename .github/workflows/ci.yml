@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -24,11 +25,17 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   test:
-    name: test ${{ matrix.os }}
+    name: test ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - { name: linux-x64, os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { name: linux-arm64, os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { name: macos-arm64, os: macos-latest, target: aarch64-apple-darwin }
+          - { name: macos-x64, os: macos-latest, target: x86_64-apple-darwin, cross: true }
+          - { name: windows-x64, os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { name: windows-arm64, os: windows-11-arm, target: aarch64-pc-windows-msvc }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -36,16 +43,81 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libwayland-dev
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}
+          key: ${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
       - name: Build
-        run: cargo build --release --locked --workspace
-      - name: Test
-        run: cargo test --workspace --release --locked
+        run: cargo build --release --locked --target ${{ matrix.target }} -p cs320sim
       - name: Headless build
-        run: cargo build --release --locked -p cs320sim --no-default-features
+        run: cargo build --release --locked --target ${{ matrix.target }} -p cs320sim --no-default-features
+      - name: Test
+        if: ${{ !matrix.cross }}
+        run: cargo test --workspace --release --locked --target ${{ matrix.target }}
+      - name: Blinky and Vio scenarios
+        if: ${{ !matrix.cross }}
+        shell: bash
+        run: |
+          exe=target/${{ matrix.target }}/release/cs320sim
+          [ -f "$exe.exe" ] && exe="$exe.exe"
+          "$exe" fixtures/elf/Blinky.elf --headless --speed max --scenario tests/scenarios/blinky.yaml
+          "$exe" fixtures/elf/Vio.elf --headless --speed max --scenario tests/scenarios/vio.yaml
+      # One archive per target, made here: artifacts do not keep the executable bit.
+      - name: Package
+        shell: bash
+        run: |
+          version=${GITHUB_REF_NAME//\//-}
+          name=cs320sim-$version-${{ matrix.name }}
+          mkdir -p "dist/$name"
+          exe=target/${{ matrix.target }}/release/cs320sim
+          [ -f "$exe.exe" ] && exe="$exe.exe"
+          cp "$exe" README.md LICENSE "dist/$name/"
+          cp -r cmsis "dist/$name/"
+          cd dist
+          if [ "$RUNNER_OS" = "Windows" ]; then
+              7z a -tzip -bso0 "$name.zip" "$name"
+              echo "PKG=$name.zip" >> "$GITHUB_ENV"
+          else
+              tar -czf "$name.tar.gz" "$name"
+              echo "PKG=$name.tar.gz" >> "$GITHUB_ENV"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PKG }}
+          path: dist/${{ env.PKG }}
+          if-no-files-found: error
+
+  release:
+    name: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [check, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum cs320sim-* > SHA256SUMS && cat SHA256SUMS
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<EOF
+          Corstone-320 simulator $GITHUB_REF_NAME: Cortex-M85 with Helium, Ethos-U85 NPU, SSE-320
+          subsystem and MPS4 board, GDB server for the Arm CMSIS Debugger, board window.
+
+          One archive per host: \`cs320sim\` (\`cs320sim.exe\`), the README, the licence and the CMSIS
+          Debugger adapter files in \`cmsis/\`. The binaries are not signed: on macOS, clear the quarantine
+          attribute after unpacking (\`xattr -d com.apple.quarantine cs320sim\`); on Linux, the board window
+          needs X11 or Wayland with libxkbcommon, and sound needs libasound2.
+          EOF
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+              --title "corstone-320-sim $GITHUB_REF_NAME" --notes-file notes.md --generate-notes --verify-tag

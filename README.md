@@ -25,8 +25,25 @@ clocks, so `--stats` cycle counts are comparable with the FVP.
 
 ## Install
 
-[Releases](https://github.com/MatthiasHertelArm/corstone-320-sim/releases) carry the binary for each host
-once they are published. Until then, build from source.
+[Releases](https://github.com/MatthiasHertelArm/corstone-320-sim/releases) have one archive per host:
+Linux, macOS and Windows, each on x64 and arm64. Each holds `cs320sim` (`cs320sim.exe`), this README, the
+licence and the CMSIS Debugger adapter files in `cmsis/`; `SHA256SUMS` has the checksums.
+
+Asset names: `cs320sim-<version>-<os>-<arch>.tar.gz` (`.zip` on Windows), with `<os>` `linux`, `macos` or
+`windows` and `<arch>` `x64` or `arm64`.
+
+macOS arm64 example, with the GitHub CLI:
+
+```sh
+gh release download v0.1.0 -R MatthiasHertelArm/corstone-320-sim -p 'cs320sim-v0.1.0-macos-arm64.tar.gz'
+tar -xzf cs320sim-v0.1.0-macos-arm64.tar.gz
+xattr -d com.apple.quarantine cs320sim-v0.1.0-macos-arm64/cs320sim   # unsigned binary
+export PATH="$PWD/cs320sim-v0.1.0-macos-arm64:$PATH"
+cs320sim --help
+```
+
+Verify a download against `SHA256SUMS` from the same release (`shasum -a 256 -c SHA256SUMS --ignore-missing`).
+Without a release for your host, build from source (see [Build](#build)).
 
 ## Build
 
