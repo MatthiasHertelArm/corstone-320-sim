@@ -215,7 +215,7 @@ impl Webcam {
             let mut rgb = vec![0u8; (w * h * 3) as usize];
             while out.read_exact(&mut rgb).is_ok() {
                 let mut data = vec![255u8; (w * h * 4) as usize];
-                for (d, s) in data.chunks_exact_mut(4).zip(rgb.chunks_exact(3)) {
+                for (d, s) in data.as_chunks_mut::<4>().0.iter_mut().zip(rgb.as_chunks::<3>().0) {
                     d[..3].copy_from_slice(s);
                 }
                 if let Ok(mut l) = slot.lock() {
@@ -293,7 +293,7 @@ impl HostMic {
                     break;
                 }
                 if let Ok(mut d) = mic_slot.lock() {
-                    d.extend(buf[..n].chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])));
+                    d.extend(buf[..n].as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b)));
                     let excess = d.len().saturating_sub(MIC_LIVE_MAX);
                     d.drain(..excess);
                 }
