@@ -21,7 +21,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut mem: Vec<u8> = std::fs::read(&args[1]).expect("memory image");
     let script = std::fs::read_to_string(&args[2]).expect("script");
-    let mut macs = 1024;
+    let mut macs = 256;
     let mut basep = [0u64; 8];
     let mut qbase = 0u64;
     let mut qsize = 0u32;

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Runs the NPU test ELF on Arm's FVP_Corstone_SSE-320 in Docker (image cmsis-fvp-audit:11.32.23)
-# with the default Ethos-U85 configuration (1024 MACs) and writes its semihosting output to a file.
+# with the Ethos-U85 configuration of the simulator (256 MACs) and writes its semihosting output to a file.
 #
 #   ./record_fvp.sh                       -> re-records ../../fixtures/npu_test.fvp.txt from
 #                                            ../../fixtures/elf/npu_test.elf
@@ -36,7 +36,7 @@ docker run --rm -i --init --name npu-fvp $MOUNTS --workdir "$PWD" \
   -C mps4_board.telnetterminal2.start_telnet=0 -C mps4_board.telnetterminal2.quiet=1 \
   -C mps4_board.telnetterminal5.start_telnet=0 -C mps4_board.telnetterminal5.quiet=1 \
   -C mps4_board.subsystem.cpu0.semihosting-enable=1 \
-  -C mps4_board.subsystem.ethosu.num_macs=1024 \
+  -C mps4_board.subsystem.ethosu.num_macs=256 \
   $FVP_EXTRA --simlimit "${FVP_SIMLIMIT:-600}" -a "$ELF" > "$RAW" 2>&1
 if [ -n "$OUT" ]; then
   mv "$RAW" "$OUT"
@@ -48,7 +48,7 @@ else
     exit 1
   fi
   {
-    echo "# Output of firmware/npu-test on Arm FVP_Corstone_SSE-320, $VERSION, ethosu.num_macs=1024 (reference for the NPU)"
+    echo "# Output of firmware/npu-test on Arm FVP_Corstone_SSE-320, $VERSION, ethosu.num_macs=256 (reference for the NPU)"
     echo "# <net>.cycles_lo/hi are the FVP's PMU cycle counts: timing, not to be compared with the simulator."
     grep ': 0x\|^npu-test' "$RAW"
   } > fixtures/npu_test.fvp.txt

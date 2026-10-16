@@ -14,7 +14,7 @@ DRIVER="${ETHOSU_DRIVER:-$PACKS/ARM/ethos-u-core-driver/1.26.2/ethos_u_core_driv
 CMSIS="${CMSIS_CORE:-$PACKS/ARM/CMSIS/6.3.0/CMSIS/Core/Include}"
 COMMON="-mcpu=cortex-m85 -mthumb -mfloat-abi=hard -O2 -g -ffunction-sections -fdata-sections -Wall"
 # ETHOSU_SEMAPHORE_WAIT_INFERENCE: polling iterations before an inference is declared timed out.
-DRVDEFS="-DETHOSU_ARCH=u85 -DETHOSU_MACS=1024 -DETHOSU85 -DETHOSU -DNDEBUG \
+DRVDEFS="-DETHOSU_ARCH=u85 -DETHOSU_MACS=256 -DETHOSU85 -DETHOSU -DNDEBUG \
   -DETHOSU_LOG_SEVERITY=${ETHOSU_LOG_SEVERITY:-1} -DETHOSU_LOG_ENABLE=1 \
   -DETHOSU_SEMAPHORE_WAIT_INFERENCE=100000000ULL"
 INC="-I. -I$DRIVER/include -I$DRIVER/src -I$CMSIS"

@@ -56,12 +56,22 @@ pub struct Clocks {
     pub slow_hz: u64,
     /// Master clock of the audio I2S.
     pub audio_mclk_hz: u64,
+    /// Clock of the Ethos-U85 NPU, which converts its cycle estimate into simulated time. Not
+    /// measured yet: until it is, it follows the CPU clock.
+    pub npu_hz: u64,
 }
 
 impl Default for Clocks {
     fn default() -> Self {
         // measured on FVP_Corstone_SSE-320: CNTFID0 = 100 MHz, the slow clock is 32 kHz (not 32.768)
-        Clocks { cpu_hz: 25_000_000, periph_hz: 25_000_000, counter_hz: 100_000_000, slow_hz: 32_000, audio_mclk_hz: 12_288_000 }
+        Clocks {
+            cpu_hz: 25_000_000,
+            periph_hz: 25_000_000,
+            counter_hz: 100_000_000,
+            slow_hz: 32_000,
+            audio_mclk_hz: 12_288_000,
+            npu_hz: 25_000_000,
+        }
     }
 }
 

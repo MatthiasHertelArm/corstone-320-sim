@@ -21,9 +21,8 @@ fn compared(line: &str) -> bool {
 #[test]
 fn npu_test_matches_fvp() {
     let img = Image::load(&fixture("elf/npu_test.elf")).unwrap();
-    // The FVP reference was run with 1024 MACs (the NPU's CONFIG register and the Vela target);
-    // the simulator's own default is 256.
-    let params = Params { npu_macs: 1024, ..Params::default() };
+    // The FVP reference was run with 256 MACs (the NPU's CONFIG register and the Vela target).
+    let params = Params { npu_macs: 256, ..Params::default() };
     let mut m = Machine::new(params);
     m.load_image(&img).unwrap();
     m.power_on();

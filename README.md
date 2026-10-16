@@ -21,7 +21,9 @@ macOS; this simulator runs natively.
 | MPS4 board | 10 user LEDs, 2 buttons, 8 switches, the display window, a camera and a microphone. The camera is a host webcam, image files, a folder of frames or a test pattern, delivered through the AVH video interface and a capture peripheral with a documented register map. The microphone is the host microphone, a WAV file or a tone, delivered through I2S and the AVH audio interface. |
 
 Time is kept at the FVP's rates: one instruction per CPU clock at 25 MHz, and peripherals exact in their own
-clocks, so `--stats` cycle counts are comparable with the FVP.
+clocks, so `--stats` cycle counts are comparable with the FVP. The Ethos-U85 cycle count is an estimate
+converted at `Clocks::npu_hz`, which follows the CPU clock until the NPU clock is measured; NPU time is
+therefore not comparable with the FVP yet.
 
 ## Install
 

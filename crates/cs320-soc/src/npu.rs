@@ -2,7 +2,7 @@
 //! `cs320-npu` crate behind the APB register interface. A command stream runs to completion
 //! when the driver writes CMD.transition_to_running_state; the completion (STATUS, QREAD, the PMU
 //! and the IRQ) is delivered after the estimated NPU cycle count, during which STATUS reads as
-//! running, as on the hardware. The NPU is clocked by the CPU clock.
+//! running, as on the hardware. The estimate is converted at the NPU clock (`Clocks::npu_hz`).
 
 use crate::env::{narrow, slot, widen, Env};
 use crate::mem::Memory;
@@ -58,7 +58,7 @@ impl EthosU {
             for w in self.core.take_warnings() {
                 env.warn.warn(env.now, format!("Ethos-U85: {w}"));
             }
-            let at = env.now + c.cycles * ticks_per_hz(env.clocks.cpu_hz as f64);
+            let at = env.now + c.cycles * ticks_per_hz(env.clocks.npu_hz as f64);
             env.schedule(slot::NPU, at);
         }
     }

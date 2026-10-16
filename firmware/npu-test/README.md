@@ -3,7 +3,7 @@
 A bare-metal program that runs six Vela-compiled int8 networks on the Ethos-U85 through Arm's
 `ethos-u-core-driver` and prints, over semihosting, the NPU registers as the CPU reads them and one
 digest per network output (`name: 0x........` lines, as in `firmware/isa-test`). Its output on Arm's
-`FVP_Corstone_SSE-320` (default NPU configuration, 1024 MACs) is recorded in
+`FVP_Corstone_SSE-320` (NPU configuration of the simulator, 256 MACs) is recorded in
 `fixtures/npu_test.fvp.txt`; the simulator runs the same ELF (`fixtures/elf/npu_test.elf`) and must
 produce the same lines, except the `.cycles_*` timing lines.
 
@@ -59,7 +59,7 @@ vww2 0c295ece396e33d625c0a3726f1d1f9a7b879612c05a973d0cbf5edf43bf324c.
 Vela 5.2.0 (`pip install ethos-u-vela`), with the `Arm/vela.ini` shipped in the package:
 
 ```sh
-vela --accelerator-config ethos-u85-1024 --output-format raw --config Arm/vela.ini \
+vela --accelerator-config ethos-u85-256 --output-format raw --config Arm/vela.ini \
      --system-config Ethos_U85_SYS_DRAM_Mid --memory-mode Dedicated_Sram \
      --output-dir out/<name> <model>.tflite          # -> out/<name>/<name>_vela.npz
 python3 gen_networks.py --out networks dnn_s=out/dnn_s_quantized/dnn_s_quantized_vela.npz ...
@@ -87,7 +87,7 @@ holds the three blobs as little-endian `uint32_t` arrays in section `.netdata` p
 
 Caches stay disabled (reset state), so the driver's weak cache hooks are no-ops. The driver is built
 from the CMSIS pack `ARM.ethos-u-core-driver 1.26.2` (`ethosu_driver.c`, `ethosu_device_u85.c`,
-`ethosu_pmu.c`, `-DETHOSU_ARCH=u85 -DETHOSU85 -DETHOSU_MACS=1024`) with CMSIS-Core 6.3.0 for
+`ethosu_pmu.c`, `-DETHOSU_ARCH=u85 -DETHOSU85 -DETHOSU_MACS=256`) with CMSIS-Core 6.3.0 for
 `cmsis_compiler.h`; its `fprintf` logging is redirected to semihosting (`log_shim.h`); the mutex
 hooks are the driver's defaults and the semaphore hooks poll (`ETHOSU_SEMAPHORE_WAIT_INFERENCE` =
 10^8 polls). The PMU is armed in `ethosu_inference_begin` and read in `ethosu_inference_end`.
